@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>stock8 - 4개 캔들차트</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app">
+      <header class="app-header">
+        <div class="market-summary" id="marketSummary" aria-label="시장 요약"></div>
+      </header>
+      <main class="chart-grid" id="chartGrid"></main>
+    </div>
+
+    <template id="chart-card-template">
+      <section class="chart-card">
+        <canvas class="macd-bg" aria-label="MACD 배경"></canvas>
+        <div class="chart-stage"></div>
+        <div class="card-controls" aria-label="차트 설정">
+          <div class="timeframe-buttons"></div>
+          <label class="period-control">
+            <span>조회기간</span>
+            <input class="period-input" type="number" min="20" max="500" value="120">
+          </label>
+        </div>
+        <div class="chart-overlay">
+          <div class="symbol-block">
+            <div class="symbol-search">
+              <input class="symbol-input" type="search" autocomplete="off" spellcheck="false" aria-label="종목 검색">
+              <div class="suggestions" role="listbox"></div>
+            </div>
+            <span class="symbol-code">--</span>
+          </div>
+          <div class="ohlc-legend">
+            <span class="last-price">--</span>
+            <span class="market-status">--</span>
+            <span class="last-change">--</span>
+          </div>
+          <div class="ma-legend">
+            <button type="button" data-series="candle"><i class="candle-swatch"></i>캔들</button>
+            <button type="button" data-series="ma5"><i class="ma5"></i>5</button>
+            <button type="button" data-series="ma10"><i class="ma10"></i>10</button>
+            <button type="button" data-series="ma20"><i class="ma20"></i>20</button>
+            <button type="button" data-series="ma60"><i class="ma60"></i>60</button>
+            <button type="button" data-series="ma120"><i class="ma120"></i>120</button>
+            <button type="button" data-series="ma240"><i class="ma240"></i>240</button>
+          </div>
+        </div>
+        <div class="price-tooltip" role="tooltip"></div>
+        <div class="loading">불러오는 중</div>
+      </section>
+    </template>
+
+    <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

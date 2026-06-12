@@ -1,0 +1,848 @@
+import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
+import { extname, join, normalize } from "node:path";
+
+const PORT = Number(process.env.PORT || 8000);
+const PUBLIC_DIR = join(process.cwd(), "public");
+const KIS_APP_KEY = process.env.KIS_APP_KEY || "";
+const KIS_APP_SECRET = process.env.KIS_APP_SECRET || "";
+const KIS_BASE_URL = (process.env.KIS_BASE_URL || "https://openapi.koreainvestment.com:9443").replace(/\/$/, "");
+const KIS_ENABLED = Boolean(KIS_APP_KEY && KIS_APP_SECRET && KIS_BASE_URL);
+const KIS_TOKEN_SAFETY_MS = 60_000;
+let kisTokenCache = null;
+
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8"
+};
+
+const SYMBOL_NAMES = {
+  "000660.KS": "SK하이닉스",
+  "005930.KS": "삼성전자",
+  "035420.KS": "NAVER",
+  "035720.KS": "카카오",
+  "373220.KS": "LG에너지솔루션",
+  "207940.KS": "삼성바이오로직스",
+  "005380.KS": "현대차",
+  "000270.KS": "기아",
+  "361610.KS": "SK아이이테크놀로지",
+  "192080.KS": "더블유게임즈",
+  "393890.KQ": "더블유씨피",
+  "299170.KQ": "더블유에스아이",
+  "376980.KQ": "원티드랩",
+  "NVDA.US": "NVIDIA",
+  "TSLA.US": "Tesla",
+  "AAPL.US": "Apple",
+  "MSFT.US": "Microsoft",
+  "AMZN.US": "Amazon",
+  "META.US": "Meta",
+  "GOOGL.US": "Alphabet",
+  "AMD.US": "AMD",
+  "AVGO.US": "Broadcom",
+  "KRW=X": "달러/원",
+  "^KS11": "KOSPI",
+  "^KQ11": "KOSDAQ",
+  "^IXIC": "나스닥"
+};
+
+const US_EXCHANGE_CODES = {
+  AAPL: "NAS",
+  AMD: "NAS",
+  AMZN: "NAS",
+  AVGO: "NAS",
+  GOOGL: "NAS",
+  META: "NAS",
+  MSFT: "NAS",
+  NVDA: "NAS",
+  TSLA: "NAS"
+};
+
+const STOOQ_SYMBOLS = {
+  "000660.KS": "000660.kr",
+  "005930.KS": "005930.kr",
+  "035420.KS": "035420.kr",
+  "035720.KS": "035720.kr",
+  "373220.KS": "373220.kr",
+  "207940.KS": "207940.kr",
+  "005380.KS": "005380.kr",
+  "000270.KS": "000270.kr",
+  "361610.KS": "361610.kr",
+  "192080.KS": "192080.kr",
+  "393890.KQ": "393890.kr",
+  "299170.KQ": "299170.kr",
+  "376980.KQ": "376980.kr",
+  "NVDA.US": "nvda.us",
+  "TSLA.US": "tsla.us",
+  "AAPL.US": "aapl.us",
+  "MSFT.US": "msft.us",
+  "AVGO.US": "avgo.us",
+  "KRW=X": "usdkrw",
+  "^KS11": "^kospi",
+  "^KQ11": "^kosdaq",
+  "^IXIC": "^ndq",
+  "^GSPC": "^spx"
+};
+
+const SYMBOL_SEARCH = [
+  { symbol: "000660.KS", name: "SK하이닉스", aliases: ["하닉", "하이닉스", "sk hynix", "hynix"] },
+  { symbol: "005930.KS", name: "삼성전자", aliases: ["삼전", "삼성", "samsung"] },
+  { symbol: "035420.KS", name: "NAVER", aliases: ["네이버", "naver"] },
+  { symbol: "035720.KS", name: "카카오", aliases: ["kakao"] },
+  { symbol: "373220.KS", name: "LG에너지솔루션", aliases: ["lg엔솔", "엔솔"] },
+  { symbol: "207940.KS", name: "삼성바이오로직스", aliases: ["삼바", "바이오로직스"] },
+  { symbol: "005380.KS", name: "현대차", aliases: ["현차", "hyundai"] },
+  { symbol: "000270.KS", name: "기아", aliases: ["kia"] },
+  { symbol: "361610.KS", name: "SK아이이테크놀로지", aliases: ["sk아이", "아이이테크놀로지", "아이테크", "sk ie technology", "skiet"] },
+  { symbol: "192080.KS", name: "더블유게임즈", aliases: ["더블유", "w games", "wgames"] },
+  { symbol: "393890.KQ", name: "더블유씨피", aliases: ["더블유", "wcp"] },
+  { symbol: "299170.KQ", name: "더블유에스아이", aliases: ["더블유", "wsi"] },
+  { symbol: "376980.KQ", name: "원티드랩", aliases: ["더블유", "wanted", "wantedlab"] },
+  { symbol: "NVDA.US", name: "NVIDIA", aliases: ["엔비디아", "nvidia"] },
+  { symbol: "TSLA.US", name: "Tesla", aliases: ["테슬라", "tesla"] },
+  { symbol: "AAPL.US", name: "Apple", aliases: ["애플", "apple"] },
+  { symbol: "MSFT.US", name: "Microsoft", aliases: ["마소", "msft", "microsoft"] },
+  { symbol: "AMZN.US", name: "Amazon", aliases: ["아마존", "amazon"] },
+  { symbol: "META.US", name: "Meta", aliases: ["메타", "meta"] },
+  { symbol: "GOOGL.US", name: "Alphabet", aliases: ["구글", "google", "alphabet"] },
+  { symbol: "AMD.US", name: "AMD", aliases: ["amd"] },
+  { symbol: "AVGO.US", name: "Broadcom", aliases: ["브로드컴", "broadcom", "avgo", "avg"] }
+];
+
+const FALLBACK_BASE = {
+  "000660.KS": { price: 310000, step: 2600 },
+  "005930.KS": { price: 74600, step: 730 },
+  "NVDA.US": { price: 214.75, step: 3.1 },
+  "TSLA.US": { price: 423.7, step: 6.4 },
+  "KRW=X": { price: 1362.4, step: 4.8 },
+  "^KS11": { price: 3048.2, step: 16 },
+  "^KQ11": { price: 782.3, step: 5.2 },
+  "^IXIC": { price: 19460.5, step: 120 }
+};
+
+const INTERVAL_CONFIG = {
+  "1m": { yahooInterval: "1m", range: "1d", seconds: 60 },
+  "3m": { yahooInterval: "1m", range: "5d", seconds: 180, aggregate: 180 },
+  "5m": { yahooInterval: "5m", range: "5d", seconds: 300 },
+  "10m": { yahooInterval: "1m", range: "5d", seconds: 600, aggregate: 600 },
+  "15m": { yahooInterval: "15m", range: "5d", seconds: 900 },
+  "30m": { yahooInterval: "30m", range: "1mo", seconds: 1800 },
+  "60m": { yahooInterval: "60m", range: "3mo", seconds: 3600 },
+  "1d": { yahooInterval: "1d", range: "2y", seconds: 86400 },
+  "1wk": { yahooInterval: "1wk", range: "10y", seconds: 604800 },
+  "1mo": { yahooInterval: "1mo", range: "10y", seconds: 2592000 }
+};
+
+function stooqSymbol(symbol) {
+  const normalized = symbol.trim().toUpperCase();
+  return STOOQ_SYMBOLS[normalized] || normalized.toLowerCase();
+}
+
+function decimalsFor(symbol) {
+  return symbol.endsWith(".KS") || symbol.endsWith(".KQ") ? 0 : 2;
+}
+
+function isKoreanSymbol(symbol) {
+  return symbol.endsWith(".KS") || symbol.endsWith(".KQ");
+}
+
+function isIntradayInterval(interval) {
+  return !["1d", "1wk", "1mo"].includes(interval);
+}
+
+function yahooSymbol(symbol) {
+  const normalized = symbol.trim().toUpperCase();
+  if (normalized.endsWith(".US")) return normalized.replace(".US", "");
+  return normalized;
+}
+
+function numericField(...values) {
+  for (const value of values) {
+    const number = Number(String(value ?? "").replace(/,/g, ""));
+    if (Number.isFinite(number)) return number;
+  }
+  return NaN;
+}
+
+function marketStatus(symbol, now = new Date()) {
+  if (isKoreanSymbol(symbol)) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Seoul",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(now).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+    const minute = Number(parts.hour) * 60 + Number(parts.minute);
+    const weekday = parts.weekday;
+    const open = !["Sat", "Sun"].includes(weekday) && minute >= 9 * 60 && minute < 15 * 60 + 30;
+    return open ? "장중" : "종가";
+  }
+  if (symbol.endsWith(".US")) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(now).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+    const minute = Number(parts.hour) * 60 + Number(parts.minute);
+    const weekday = parts.weekday;
+    const open = !["Sat", "Sun"].includes(weekday) && minute >= 9 * 60 + 30 && minute < 16 * 60;
+    return open ? "장중" : "종가";
+  }
+  return "종가";
+}
+
+async function getKisAccessToken() {
+  const now = Date.now();
+  if (kisTokenCache && kisTokenCache.expiresAt - KIS_TOKEN_SAFETY_MS > now) return kisTokenCache.token;
+  if (!KIS_ENABLED) throw new Error("KIS credentials are not configured");
+  const response = await fetchWithTimeout(`${KIS_BASE_URL}/oauth2/tokenP`, 6000, {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      grant_type: "client_credentials",
+      appkey: KIS_APP_KEY,
+      appsecret: KIS_APP_SECRET
+    })
+  });
+  if (!response.ok) throw new Error(`KIS token HTTP ${response.status}`);
+  const json = await response.json();
+  if (!json.access_token) throw new Error("KIS token missing");
+  const expiresIn = Number(json.expires_in || 86_400);
+  kisTokenCache = {
+    token: json.access_token,
+    expiresAt: now + expiresIn * 1000
+  };
+  return kisTokenCache.token;
+}
+
+async function kisFetch(path, trId, params) {
+  const token = await getKisAccessToken();
+  const url = new URL(`${KIS_BASE_URL}${path}`);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  const response = await fetchWithTimeout(url, 5000, {
+    headers: {
+      "authorization": `Bearer ${token}`,
+      "appkey": KIS_APP_KEY,
+      "appsecret": KIS_APP_SECRET,
+      "tr_id": trId,
+      "custtype": "P"
+    }
+  });
+  if (!response.ok) throw new Error(`KIS ${trId} HTTP ${response.status}`);
+  const json = await response.json();
+  if (json.rt_cd && json.rt_cd !== "0") throw new Error(`KIS ${trId} ${json.msg1 || json.rt_cd}`);
+  return json;
+}
+
+function parseKisDomesticQuote(symbol, json) {
+  const output = json.output || {};
+  const price = numericField(output.stck_prpr);
+  let previousClose = numericField(output.stck_prdy_clpr, output.stck_sdpr);
+  const change = numericField(output.prdy_vrss, Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : NaN);
+  const changePercent = numericField(output.prdy_ctrt);
+  if ((!Number.isFinite(previousClose) || previousClose <= 0) && Number.isFinite(price) && Number.isFinite(change)) {
+    previousClose = price - change;
+  }
+  return {
+    symbol,
+    name: SYMBOL_NAMES[symbol] || symbol,
+    price,
+    previousClose,
+    change,
+    changePercent,
+    changeRate: changePercent,
+    asOf: Math.floor(Date.now() / 1000),
+    marketTime: Math.floor(Date.now() / 1000),
+    marketStatus: marketStatus(symbol),
+    source: "kis"
+  };
+}
+
+function parseKisOverseasQuote(symbol, json) {
+  const output = json.output || {};
+  const price = numericField(output.last, output.base);
+  let previousClose = numericField(output.prev, output.pvol);
+  const change = numericField(output.diff, Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : NaN);
+  const changePercent = numericField(output.rate);
+  if ((!Number.isFinite(previousClose) || previousClose <= 0) && Number.isFinite(price) && Number.isFinite(change)) {
+    previousClose = price - change;
+  }
+  return {
+    symbol,
+    name: SYMBOL_NAMES[symbol] || symbol,
+    price,
+    previousClose,
+    change,
+    changePercent,
+    changeRate: changePercent,
+    asOf: Math.floor(Date.now() / 1000),
+    marketTime: Math.floor(Date.now() / 1000),
+    marketStatus: marketStatus(symbol),
+    source: "kis"
+  };
+}
+
+async function fetchKisQuote(symbol) {
+  const normalized = symbol.trim().toUpperCase();
+  if (isKoreanSymbol(normalized)) {
+    const code = normalized.split(".")[0];
+    const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100", {
+      FID_COND_MRKT_DIV_CODE: "J",
+      FID_INPUT_ISCD: code
+    });
+    return parseKisDomesticQuote(normalized, json);
+  }
+  if (normalized.endsWith(".US")) {
+    const code = normalized.replace(".US", "");
+    const json = await kisFetch("/uapi/overseas-price/v1/quotations/price", "HHDFS00000300", {
+      AUTH: "",
+      EXCD: US_EXCHANGE_CODES[code] || "NAS",
+      SYMB: code
+    });
+    return parseKisOverseasQuote(normalized, json);
+  }
+  throw new Error(`KIS quote not supported for ${normalized}`);
+}
+
+function koreanMinuteOfDay(timestamp) {
+  const date = new Date(timestamp * 1000);
+  return (date.getUTCHours() * 60 + date.getUTCMinutes() + 9 * 60) % (24 * 60);
+}
+
+function replaceKoreanTime(timestamp, hour, minute) {
+  const date = new Date(timestamp * 1000);
+  const totalMinutes = hour * 60 + minute - 9 * 60;
+  date.setUTCHours(Math.floor(totalMinutes / 60), ((totalMinutes % 60) + 60) % 60, 0, 0);
+  return Math.floor(date.getTime() / 1000);
+}
+
+function normalizeKoreanIntradayRows(symbol, rows) {
+  if (!isKoreanSymbol(symbol)) return rows;
+  const byTime = new Map();
+  const closingAuctionStart = 15 * 60 + 20;
+  const closingAuctionEnd = 15 * 60 + 30;
+  const closeMinute = 15 * 60 + 30;
+  const finalPrintMinute = 15 * 60 + 31;
+
+  for (const row of rows) {
+    const minute = koreanMinuteOfDay(row.time);
+    const time = minute === finalPrintMinute ? replaceKoreanTime(row.time, 15, 30) : row.time;
+    if (minute >= closingAuctionStart && minute <= closingAuctionEnd) continue;
+    if (minute > closeMinute && minute !== finalPrintMinute) continue;
+    const existing = byTime.get(time);
+    if (!existing) {
+      byTime.set(time, { ...row, time });
+      continue;
+    }
+    byTime.set(time, {
+      time,
+      open: existing.open,
+      high: Math.max(existing.high, row.high),
+      low: Math.min(existing.low, row.low),
+      close: row.close,
+      volume: (existing.volume || 0) + (row.volume || 0)
+    });
+  }
+
+  return [...byTime.values()].sort((a, b) => a.time - b.time);
+}
+
+function applyKoreanClosingPrint(symbol, rows, payload) {
+  const marketTime = Number(payload.marketTime || payload.asOf);
+  const price = Number(payload.price);
+  if (!isKoreanSymbol(symbol) || !Number.isFinite(marketTime) || !Number.isFinite(price)) return rows;
+  if (koreanMinuteOfDay(marketTime) < 15 * 60 + 30) return rows;
+
+  const closeTime = replaceKoreanTime(marketTime, 15, 30);
+  const next = rows.filter((row) => row.time !== closeTime);
+  const existing = rows.find((row) => row.time === closeTime);
+  next.push(existing
+    ? {
+        ...existing,
+        high: Math.max(existing.high, price),
+        low: Math.min(existing.low, price),
+        close: price
+      }
+    : {
+        time: closeTime,
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        volume: 0
+      });
+  return next.sort((a, b) => a.time - b.time);
+}
+
+function parseDailyCsv(text) {
+  return text
+    .trim()
+    .split("\n")
+    .slice(1)
+    .map((line) => {
+      const [date, open, high, low, close, volume] = line.split(",");
+      return {
+        time: date,
+        open: Number(open),
+        high: Number(high),
+        low: Number(low),
+        close: Number(close),
+        volume: Number(volume)
+      };
+    })
+    .filter((row) => row.time && [row.open, row.high, row.low, row.close].every(Number.isFinite));
+}
+
+function parseYahooIntraday(symbol, json) {
+  const result = json?.chart?.result?.[0];
+  const meta = result?.meta || {};
+  const quote = result?.indicators?.quote?.[0] || {};
+  const timestamps = result?.timestamp || [];
+  const rows = [];
+
+  for (let i = 0; i < timestamps.length; i += 1) {
+    const open = Number(quote.open?.[i]);
+    const high = Number(quote.high?.[i]);
+    const low = Number(quote.low?.[i]);
+    const close = Number(quote.close?.[i]);
+    if (![open, high, low, close].every((value) => Number.isFinite(value) && value > 0)) continue;
+    rows.push({
+      time: Number(timestamps[i]),
+      open,
+      high,
+      low,
+      close,
+      volume: Number(quote.volume?.[i] || 0)
+    });
+  }
+
+  if (rows.length > 8) {
+    const ranges = rows
+      .map((row) => row.high - row.low)
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((a, b) => a - b);
+    const medianRange = ranges[Math.floor(ranges.length / 2)] || 0;
+    const guard = Math.max(medianRange * 10, Number(meta.regularMarketPrice || rows.at(-1)?.close || 0) * 0.018);
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      if (rows[i].high - rows[i].low > guard) rows.splice(i, 1);
+    }
+  }
+
+  const previousClose = Number(
+    meta.chartPreviousClose ?? meta.previousClose ?? meta.regularMarketPreviousClose
+  );
+  const price = Number(meta.regularMarketPrice ?? rows.at(-1)?.close);
+  const change = Number.isFinite(previousClose) ? price - previousClose : price - rows.at(-1)?.open;
+  const changePercent = Number.isFinite(previousClose) && previousClose !== 0
+    ? (change / previousClose) * 100
+    : 0;
+
+  return {
+    symbol,
+    price,
+    previousClose,
+    change,
+    changePercent,
+    asOf: rows.at(-1)?.time || Math.floor(Date.now() / 1000),
+    marketTime: Number(meta.regularMarketTime || rows.at(-1)?.time || Math.floor(Date.now() / 1000)),
+    series: rows
+  };
+}
+
+function parseYahooChart(symbol, json) {
+  const result = json?.chart?.result?.[0];
+  const meta = result?.meta || {};
+  const quote = result?.indicators?.quote?.[0] || {};
+  const timestamps = result?.timestamp || [];
+  const rows = [];
+
+  for (let i = 0; i < timestamps.length; i += 1) {
+    const open = Number(quote.open?.[i]);
+    const high = Number(quote.high?.[i]);
+    const low = Number(quote.low?.[i]);
+    const close = Number(quote.close?.[i]);
+    if (![open, high, low, close].every((value) => Number.isFinite(value) && value > 0)) continue;
+    rows.push({
+      time: Number(timestamps[i]),
+      open,
+      high,
+      low,
+      close,
+      volume: Number(quote.volume?.[i] || 0)
+    });
+  }
+
+  const previousClose = Number(
+    meta.chartPreviousClose ?? meta.previousClose ?? meta.regularMarketPreviousClose
+  );
+  const last = rows.at(-1);
+  const prev = rows.at(-2);
+  const price = Number(meta.regularMarketPrice ?? last?.close);
+  const compareClose = Number.isFinite(previousClose) ? previousClose : prev?.close;
+  const change = Number.isFinite(compareClose) ? price - compareClose : price - last?.open;
+  const changePercent = Number.isFinite(compareClose) && compareClose !== 0 ? (change / compareClose) * 100 : 0;
+
+  return {
+    symbol,
+    price,
+    previousClose: compareClose,
+    change,
+    changePercent,
+    asOf: Number(meta.regularMarketTime || last?.time || Math.floor(Date.now() / 1000)),
+    marketTime: Number(meta.regularMarketTime || last?.time || Math.floor(Date.now() / 1000)),
+    series: rows
+  };
+}
+
+function applyLatestDailyPrice(rows, payload) {
+  if (!rows.length || !Number.isFinite(payload.price) || !Number.isFinite(payload.marketTime)) return rows;
+  const next = [...rows];
+  const last = next.at(-1);
+  const liveClose = payload.price;
+  if (payload.marketTime > last.time + 18 * 60 * 60) {
+    next.push({
+      time: payload.marketTime,
+      open: last.close,
+      high: Math.max(last.close, liveClose),
+      low: Math.min(last.close, liveClose),
+      close: liveClose,
+      volume: 0
+    });
+    return next;
+  }
+  if (payload.marketTime >= last.time) {
+    next[next.length - 1] = {
+      ...last,
+      high: Math.max(last.high, liveClose),
+      low: Math.min(last.low, liveClose),
+      close: liveClose
+    };
+  }
+  return next;
+}
+
+function applyLiveQuoteToRows(rows, quote, intervalSeconds = 60) {
+  if (!rows.length || !quote || !Number.isFinite(quote.price)) return rows;
+  const next = [...rows];
+  const last = next.at(-1);
+  const quoteTime = Number(quote.marketTime || quote.asOf || Math.floor(Date.now() / 1000));
+  const bucketTime = Math.floor(quoteTime / intervalSeconds) * intervalSeconds;
+  const targetTime = bucketTime >= last.time ? bucketTime : last.time;
+  if (targetTime === last.time) {
+    next[next.length - 1] = {
+      ...last,
+      high: Math.max(last.high, quote.price),
+      low: Math.min(last.low, quote.price),
+      close: quote.price
+    };
+    return next;
+  }
+  next.push({
+    time: targetTime,
+    open: last.close,
+    high: Math.max(last.close, quote.price),
+    low: Math.min(last.close, quote.price),
+    close: quote.price,
+    volume: 0
+  });
+  return next;
+}
+
+function aggregateRows(rows, seconds) {
+  const buckets = new Map();
+  for (const row of rows) {
+    const bucketTime = Math.floor(row.time / seconds) * seconds;
+    const bucket = buckets.get(bucketTime);
+    if (!bucket) {
+      buckets.set(bucketTime, { ...row, time: bucketTime });
+      continue;
+    }
+    bucket.high = Math.max(bucket.high, row.high);
+    bucket.low = Math.min(bucket.low, row.low);
+    bucket.close = row.close;
+    bucket.volume += row.volume || 0;
+  }
+  return [...buckets.values()].sort((a, b) => a.time - b.time);
+}
+
+async function fetchWithTimeout(url, timeoutMs = 3500, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 stock8-four-candles",
+        ...(options.headers || {})
+      }
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {
+  const base = FALLBACK_BASE[symbol] || FALLBACK_BASE["NVDA.US"];
+  const rows = [];
+  let close = base.price - base.step * 12;
+  const now = Math.floor(Date.now() / 1000 / intervalSeconds) * intervalSeconds;
+  for (let i = limit - 1; i >= 0; i -= 1) {
+    const wave = Math.sin(i * 0.18 + symbol.length) * base.step * 1.8;
+    const drift = (limit - i) * base.step * 0.08;
+    const open = close + Math.cos(i * 0.13) * base.step * 0.8;
+    close = Math.max(base.step, open + wave * 0.18 + drift * 0.04);
+    const high = Math.max(open, close) + base.step * (0.8 + Math.abs(Math.sin(i)));
+    const low = Math.min(open, close) - base.step * (0.7 + Math.abs(Math.cos(i)));
+    rows.push({
+      time: now - i * intervalSeconds,
+      open: Number(open.toFixed(decimalsFor(symbol))),
+      high: Number(high.toFixed(decimalsFor(symbol))),
+      low: Number(low.toFixed(decimalsFor(symbol))),
+      close: Number(close.toFixed(decimalsFor(symbol))),
+      volume: Math.round(1_000_000 + Math.abs(Math.sin(i * 0.3)) * 8_000_000)
+    });
+  }
+  return rows;
+}
+
+async function getIntraday(symbol, interval = "1m") {
+  const normalized = symbol.trim().toUpperCase();
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=1d&interval=${encodeURIComponent(interval)}&includePrePost=false`;
+    const response = await fetchWithTimeout(url, 4000);
+    if (!response.ok) throw new Error(`Yahoo HTTP ${response.status}`);
+    const payload = parseYahooIntraday(normalized, await response.json());
+    payload.series = normalizeKoreanIntradayRows(normalized, payload.series);
+    payload.series = applyKoreanClosingPrint(normalized, payload.series, payload);
+    if (!payload.series.length) throw new Error("No intraday data");
+    return payload;
+  } catch {
+    const series = fallbackCandles(normalized, 96, 60);
+    const previousClose = series[0].open;
+    const price = series.at(-1).close;
+    const change = price - previousClose;
+    return {
+      symbol: normalized,
+      price,
+      previousClose,
+      change,
+      changePercent: previousClose ? (change / previousClose) * 100 : 0,
+      asOf: series.at(-1).time,
+      series
+    };
+  }
+}
+
+async function getChart(symbol, interval = "1d", limit = 120) {
+  const normalized = symbol.trim().toUpperCase();
+  const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
+  try {
+    let liveQuote = null;
+    try {
+      liveQuote = await fetchKisQuote(normalized);
+    } catch {
+      liveQuote = null;
+    }
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=${encodeURIComponent(config.range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=false`;
+    const response = await fetchWithTimeout(url, 4500);
+    if (!response.ok) throw new Error(`Yahoo HTTP ${response.status}`);
+    const payload = parseYahooChart(normalized, await response.json());
+    if (liveQuote) {
+      payload.price = liveQuote.price;
+      payload.previousClose = liveQuote.previousClose;
+      payload.change = liveQuote.change;
+      payload.changePercent = liveQuote.changePercent;
+      payload.asOf = liveQuote.asOf;
+      payload.marketTime = liveQuote.marketTime;
+      payload.marketStatus = liveQuote.marketStatus;
+      payload.source = liveQuote.source;
+    }
+    if (!payload.series.length) throw new Error("No chart data");
+    let series = isIntradayInterval(interval)
+      ? normalizeKoreanIntradayRows(normalized, payload.series)
+      : payload.series;
+    if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
+    series = config.aggregate ? aggregateRows(series, config.aggregate) : series;
+    if (interval === "1d") series = applyLatestDailyPrice(series, payload);
+    if (isIntradayInterval(interval) && liveQuote) series = applyLiveQuoteToRows(series, liveQuote, config.seconds);
+    const trimmed = series.slice(-limit);
+    const lastClose = trimmed.at(-1)?.close;
+    const prevClose = trimmed.at(-2)?.close;
+    let price = payload.price;
+    let previousClose = payload.previousClose;
+    if (interval === "1d") {
+      previousClose = prevClose ?? lastClose;
+    } else if (interval === "1wk" || interval === "1mo") {
+      price = lastClose;
+      previousClose = prevClose;
+    }
+    if (liveQuote) {
+      price = liveQuote.price;
+      previousClose = liveQuote.previousClose;
+    }
+    const change = liveQuote?.change ?? (Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : 0);
+    return {
+      ...payload,
+      price,
+      previousClose,
+      change,
+      changePercent: liveQuote?.changePercent ?? (Number.isFinite(previousClose) && previousClose !== 0 ? (change / previousClose) * 100 : 0),
+      marketStatus: payload.marketStatus || marketStatus(normalized),
+      source: payload.source || "yahoo-or-sample",
+      series: trimmed
+    };
+  } catch {
+    const series = fallbackCandles(normalized, limit, config.seconds);
+    const previousClose = series.length > 1 ? series.at(-2).close : series[0].open;
+    const price = series.at(-1).close;
+    const change = price - previousClose;
+    return {
+      symbol: normalized,
+      price,
+      previousClose,
+      change,
+      changePercent: previousClose ? (change / previousClose) * 100 : 0,
+      asOf: series.at(-1).time,
+      marketStatus: marketStatus(normalized),
+      source: "fallback",
+      series
+    };
+  }
+}
+
+async function getCandles(symbol, limit = 140) {
+  const normalized = symbol.trim().toUpperCase();
+  try {
+    const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSymbol(normalized))}&i=d`;
+    const response = await fetchWithTimeout(url);
+    if (!response.ok) throw new Error(`Stooq HTTP ${response.status}`);
+    const rows = parseDailyCsv(await response.text());
+    if (!rows.length) throw new Error("No candle data");
+    return rows.slice(-limit);
+  } catch {
+    return fallbackCandles(normalized, limit, 86400);
+  }
+}
+
+async function getQuote(symbol) {
+  const normalized = symbol.trim().toUpperCase();
+  try {
+    return await fetchKisQuote(normalized);
+  } catch {
+    // Keep the dashboard usable when KIS credentials are missing or the API is temporarily unavailable.
+  }
+  const intraday = await getIntraday(normalized, "1m");
+  return {
+    symbol: normalized,
+    name: SYMBOL_NAMES[normalized] || normalized,
+    price: intraday.price,
+    previousClose: intraday.previousClose,
+    change: intraday.change,
+    changePercent: intraday.changePercent,
+    changeRate: intraday.changePercent,
+    asOf: intraday.asOf,
+    marketStatus: marketStatus(normalized),
+    source: "yahoo-or-sample"
+  };
+}
+
+async function sendJson(res, payload) {
+  res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+  res.end(JSON.stringify(payload));
+}
+
+async function serveStatic(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const rawPath = url.pathname === "/" ? "/index.html" : url.pathname;
+  const safePath = normalize(decodeURIComponent(rawPath)).replace(/^(\.\.[/\\])+/, "");
+  const filePath = join(PUBLIC_DIR, safePath);
+
+  try {
+    const content = await readFile(filePath);
+    res.writeHead(200, { "Content-Type": MIME[extname(filePath)] || "application/octet-stream" });
+    res.end(content);
+  } catch {
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Not found");
+  }
+}
+
+createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (url.pathname === "/health") {
+    await sendJson(res, { status: "ok" });
+    return;
+  }
+
+  if (url.pathname === "/api/quote") {
+    await sendJson(res, await getQuote(url.searchParams.get("symbol") || "NVDA.US"));
+    return;
+  }
+
+  if (url.pathname === "/api/candles") {
+    const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
+    const limit = Math.min(260, Math.max(40, Number(url.searchParams.get("limit") || 140)));
+    await sendJson(res, {
+      ok: true,
+      symbol,
+      name: url.searchParams.get("name") || SYMBOL_NAMES[symbol] || symbol,
+      decimals: decimalsFor(symbol),
+      series: await getCandles(symbol, limit)
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/intraday") {
+    const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
+    const interval = url.searchParams.get("interval") || "1m";
+    const payload = await getIntraday(symbol, interval);
+    await sendJson(res, {
+      ok: true,
+      symbol,
+      name: url.searchParams.get("name") || SYMBOL_NAMES[symbol] || symbol,
+      decimals: decimalsFor(symbol),
+      ...payload
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/chart") {
+    const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
+    const interval = url.searchParams.get("interval") || "1d";
+    const limit = Math.min(900, Math.max(20, Number(url.searchParams.get("limit") || 120)));
+    const payload = await getChart(symbol, interval, limit);
+    await sendJson(res, {
+      ok: true,
+      symbol,
+      interval,
+      limit,
+      name: url.searchParams.get("name") || SYMBOL_NAMES[symbol] || symbol,
+      decimals: decimalsFor(symbol),
+      ...payload
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/search") {
+    const q = (url.searchParams.get("q") || "").trim().toLowerCase();
+    const compact = q.replace(/\s+/g, "");
+    const matches = SYMBOL_SEARCH.filter((item) => {
+      const haystack = [item.symbol, item.name, ...(item.aliases || [])]
+        .join(" ")
+        .toLowerCase();
+      return !compact || haystack.replace(/\s+/g, "").includes(compact) || haystack.includes(q);
+    }).slice(0, 8);
+    await sendJson(res, { ok: true, results: matches });
+    return;
+  }
+
+  await serveStatic(req, res);
+}).listen(PORT, () => {
+  console.log(`stock8 four-candle dashboard: http://127.0.0.1:${PORT}`);
+});
