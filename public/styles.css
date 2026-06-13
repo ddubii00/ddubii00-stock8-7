@@ -323,29 +323,33 @@ body {
 
 .ohlc-legend {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 5px 8px;
   min-width: 0;
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .last-price {
   color: var(--text);
   font-size: 16px;
   font-weight: 800;
+  flex-shrink: 0;
 }
 
 .last-change {
   font-size: 12px;
+  flex-shrink: 0;
 }
 
 .market-status {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   height: 17px;
   padding: 0 5px;
   border-radius: 4px;
@@ -567,5 +571,6 @@ body {
 
   .ohlc-legend {
     grid-column: 1 / -1;
+    min-width: max-content;
   }
 }

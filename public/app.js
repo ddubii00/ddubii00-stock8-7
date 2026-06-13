@@ -69,13 +69,22 @@ function isKoreanSymbol(symbol) {
   return symbol?.endsWith(".KS") || symbol?.endsWith(".KQ");
 }
 
+function priceDecimalsForSymbol(symbol) {
+  return symbol?.endsWith(".US") ? 2 : CHART_PRICE_DECIMALS;
+}
+
+function priceFormatForSymbol(symbol) {
+  const precision = priceDecimalsForSymbol(symbol);
+  return { type: "price", precision, minMove: precision === 2 ? 0.01 : 1 };
+}
+
 function formatAxisPrice(value, symbol) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
   if (isKoreanSymbol(symbol) && Math.abs(number) >= 1_000) {
     return `${formatNumber(Math.round(number / 1_000), 0)}k`;
   }
-  return formatNumber(number, CHART_PRICE_DECIMALS);
+  return formatNumber(number, priceDecimalsForSymbol(symbol));
 }
 
 function isSymbolEditing(state) {
@@ -135,6 +144,7 @@ function calcMacd(rows) {
 }
 
 function createLwChart(container, state) {
+  const priceFormat = priceFormatForSymbol(state.item.symbol);
   const chart = LightweightCharts.createChart(container, {
     width: container.clientWidth,
     height: container.clientHeight,
@@ -184,7 +194,7 @@ function createLwChart(container, state) {
     wickDownColor: "#1f5bd8",
     lastValueVisible: false,
     priceLineVisible: false,
-    priceFormat: { type: "price", precision: CHART_PRICE_DECIMALS, minMove: 1 }
+    priceFormat
   });
 
   const maSeries = {};
@@ -195,7 +205,7 @@ function createLwChart(container, state) {
       crosshairMarkerVisible: false,
       lastValueVisible: false,
       priceLineVisible: false,
-      priceFormat: { type: "price", precision: CHART_PRICE_DECIMALS, minMove: 1 }
+      priceFormat
     });
   }
 
@@ -219,7 +229,7 @@ function showTooltip(state, param) {
     return;
   }
 
-  const decimals = CHART_PRICE_DECIMALS;
+  const decimals = priceDecimalsForSymbol(state.item.symbol);
   const changePct = row.open ? ((row.close - row.open) / row.open) * 100 : 0;
   const direction = changePct >= 0 ? "up" : "down";
   tooltip.innerHTML = `
@@ -333,7 +343,7 @@ function renderLegend(state, payload) {
   const last = rows.at(-1);
   const changePct = Number(payload.changePercent ?? 0);
   const direction = changePct >= 0 ? "up" : "down";
-  const decimals = CHART_PRICE_DECIMALS;
+  const decimals = priceDecimalsForSymbol(payload.symbol || state.item.symbol);
   const card = state.card;
 
   if (!isSymbolEditing(state)) {
@@ -358,6 +368,7 @@ function applyPayload(state, payload, initial = false) {
 
   state.rows = rows;
   state.macd = calcMacd(rows);
+  const priceFormat = priceFormatForSymbol(state.item.symbol);
   state.instance.chart.applyOptions({
     localization: {
       timeFormatter: (time) => tickFormatter(state.interval, time),
@@ -370,6 +381,10 @@ function applyPayload(state, payload, initial = false) {
       tickMarkFormatter: (time) => tickFormatter(state.interval, time)
     }
   });
+  state.instance.candleSeries.applyOptions({ priceFormat });
+  for (const period of MA_PERIODS) {
+    state.instance.maSeries[period].applyOptions({ priceFormat });
+  }
 
   if (!initial && isIntraday(state.interval) && previousLastTime === latest.time && state.visible.candle) {
     state.instance.candleSeries.update(latest);
