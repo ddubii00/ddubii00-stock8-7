@@ -440,12 +440,15 @@ async function showSuggestions(card, query) {
       button.addEventListener("mousedown", async (event) => {
         event.preventDefault();
         const state = chartState.get(card.dataset.cardId);
+        const input = card.querySelector(".symbol-input");
         state.item = {
           symbol: item.symbol,
           name: item.name,
           decimals: item.symbol.endsWith(".KS") || item.symbol.endsWith(".KQ") ? 0 : 2
         };
         state.isEditingSymbol = false;
+        input.value = item.name;
+        input.blur();
         closeSuggestions(card);
         await refreshCard(state, true);
       });
