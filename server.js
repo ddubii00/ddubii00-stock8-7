@@ -41,6 +41,7 @@ const SYMBOL_NAMES = {
   "GOOGL.US": "Alphabet",
   "AMD.US": "AMD",
   "AVGO.US": "Broadcom",
+  "SNDK.US": "Sandisk",
   "KRW=X": "달러/원",
   "^KS11": "KOSPI",
   "^KQ11": "KOSDAQ",
@@ -56,6 +57,7 @@ const US_EXCHANGE_CODES = {
   META: "NAS",
   MSFT: "NAS",
   NVDA: "NAS",
+  SNDK: "NAS",
   TSLA: "NAS"
 };
 
@@ -78,6 +80,7 @@ const STOOQ_SYMBOLS = {
   "AAPL.US": "aapl.us",
   "MSFT.US": "msft.us",
   "AVGO.US": "avgo.us",
+  "SNDK.US": "sndk.us",
   "KRW=X": "usdkrw",
   "^KS11": "^kospi",
   "^KQ11": "^kosdaq",
@@ -107,12 +110,15 @@ const SYMBOL_SEARCH = [
   { symbol: "META.US", name: "Meta", aliases: ["메타", "meta"] },
   { symbol: "GOOGL.US", name: "Alphabet", aliases: ["구글", "google", "alphabet"] },
   { symbol: "AMD.US", name: "AMD", aliases: ["amd"] },
-  { symbol: "AVGO.US", name: "Broadcom", aliases: ["브로드컴", "broadcom", "avgo", "avg"] }
+  { symbol: "AVGO.US", name: "Broadcom", aliases: ["브로드컴", "broadcom", "avgo", "avg"] },
+  { symbol: "SNDK.US", name: "Sandisk", aliases: ["샌디스크", "sandisk", "sndk"] }
 ];
 
 const FALLBACK_BASE = {
   "000660.KS": { price: 310000, step: 2600 },
   "005930.KS": { price: 74600, step: 730 },
+  "AVGO.US": { price: 1785.25, step: 18.5 },
+  "SNDK.US": { price: 905.5, step: 12.4 },
   "NVDA.US": { price: 214.75, step: 3.1 },
   "TSLA.US": { price: 423.7, step: 6.4 },
   "KRW=X": { price: 1362.4, step: 4.8 },
@@ -147,6 +153,20 @@ function isKoreanSymbol(symbol) {
   return symbol.endsWith(".KS") || symbol.endsWith(".KQ");
 }
 
+function isKoreanIndex(symbol) {
+  return symbol === "^KS11" || symbol === "^KQ11";
+}
+
+function kisIndexCode(symbol) {
+  if (symbol === "^KS11") return "0001";
+  if (symbol === "^KQ11") return "1001";
+  return "";
+}
+
+function isUsSymbol(symbol) {
+  return symbol.endsWith(".US");
+}
+
 function isIntradayInterval(interval) {
   return !["1d", "1wk", "1mo"].includes(interval);
 }
@@ -166,7 +186,7 @@ function numericField(...values) {
 }
 
 function marketStatus(symbol, now = new Date()) {
-  if (isKoreanSymbol(symbol)) {
+  if (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: "Asia/Seoul",
       weekday: "short",
@@ -177,6 +197,7 @@ function marketStatus(symbol, now = new Date()) {
     const minute = Number(parts.hour) * 60 + Number(parts.minute);
     const weekday = parts.weekday;
     const open = !["Sat", "Sun"].includes(weekday) && minute >= 9 * 60 && minute < 15 * 60 + 30;
+    if (isKoreanIndex(symbol)) return open ? "장중" : "장종료";
     return open ? "장중" : "종가";
   }
   if (symbol.endsWith(".US")) {
@@ -262,6 +283,30 @@ function parseKisDomesticQuote(symbol, json) {
   };
 }
 
+function parseKisIndexQuote(symbol, json) {
+  const output = json.output || {};
+  const price = numericField(output.bstp_nmix_prpr, output.bstp_nmix, output.stck_prpr);
+  let previousClose = numericField(output.prdy_clpr, output.bstp_nmix_prdy_clpr, output.stck_prdy_clpr);
+  const change = numericField(output.prdy_vrss, Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : NaN);
+  const changePercent = numericField(output.prdy_ctrt);
+  if ((!Number.isFinite(previousClose) || previousClose <= 0) && Number.isFinite(price) && Number.isFinite(change)) {
+    previousClose = price - change;
+  }
+  return {
+    symbol,
+    name: SYMBOL_NAMES[symbol] || symbol,
+    price,
+    previousClose,
+    change,
+    changePercent,
+    changeRate: changePercent,
+    asOf: Math.floor(Date.now() / 1000),
+    marketTime: Math.floor(Date.now() / 1000),
+    marketStatus: marketStatus(symbol),
+    source: "kis"
+  };
+}
+
 function parseKisOverseasQuote(symbol, json) {
   const output = json.output || {};
   const price = numericField(output.last, output.base);
@@ -288,6 +333,13 @@ function parseKisOverseasQuote(symbol, json) {
 
 async function fetchKisQuote(symbol) {
   const normalized = symbol.trim().toUpperCase();
+  if (isKoreanIndex(normalized)) {
+    const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-index-price", "FHPUP02100000", {
+      FID_COND_MRKT_DIV_CODE: "U",
+      FID_INPUT_ISCD: kisIndexCode(normalized)
+    });
+    return parseKisIndexQuote(normalized, json);
+  }
   if (isKoreanSymbol(normalized)) {
     const code = normalized.split(".")[0];
     const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100", {
@@ -610,10 +662,11 @@ function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {
   return rows;
 }
 
-async function getIntraday(symbol, interval = "1m") {
+async function getIntraday(symbol, interval = "1m", mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=1d&interval=${encodeURIComponent(interval)}&includePrePost=false`;
+    const includePrePost = mode === "NTX" && isUsSymbol(normalized);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=1d&interval=${encodeURIComponent(interval)}&includePrePost=${includePrePost ? "true" : "false"}`;
     const response = await fetchWithTimeout(url, 4000);
     if (!response.ok) throw new Error(`Yahoo HTTP ${response.status}`);
     const payload = parseYahooIntraday(normalized, await response.json());
@@ -638,7 +691,7 @@ async function getIntraday(symbol, interval = "1m") {
   }
 }
 
-async function getChart(symbol, interval = "1d", limit = 120) {
+async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
   try {
@@ -648,7 +701,9 @@ async function getChart(symbol, interval = "1d", limit = 120) {
     } catch {
       liveQuote = null;
     }
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=${encodeURIComponent(config.range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=false`;
+    const includePrePost = mode === "NTX" && isUsSymbol(normalized) && isIntradayInterval(interval);
+    const range = includePrePost ? "1d" : config.range;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=${includePrePost ? "true" : "false"}`;
     const response = await fetchWithTimeout(url, 4500);
     if (!response.ok) throw new Error(`Yahoo HTTP ${response.status}`);
     const payload = parseYahooChart(normalized, await response.json());
@@ -729,14 +784,14 @@ async function getCandles(symbol, limit = 140) {
   }
 }
 
-async function getQuote(symbol) {
+async function getQuote(symbol, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
   try {
     return await fetchKisQuote(normalized);
   } catch {
     // Keep the dashboard usable when KIS credentials are missing or the API is temporarily unavailable.
   }
-  const intraday = await getIntraday(normalized, "1m");
+  const intraday = await getIntraday(normalized, "1m", mode);
   return {
     symbol: normalized,
     name: SYMBOL_NAMES[normalized] || normalized,
@@ -781,7 +836,7 @@ createServer(async (req, res) => {
   }
 
   if (url.pathname === "/api/quote") {
-    await sendJson(res, await getQuote(url.searchParams.get("symbol") || "NVDA.US"));
+    await sendJson(res, await getQuote(url.searchParams.get("symbol") || "NVDA.US", url.searchParams.get("mode") || "KRX"));
     return;
   }
 
@@ -801,7 +856,7 @@ createServer(async (req, res) => {
   if (url.pathname === "/api/intraday") {
     const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
     const interval = url.searchParams.get("interval") || "1m";
-    const payload = await getIntraday(symbol, interval);
+    const payload = await getIntraday(symbol, interval, url.searchParams.get("mode") || "KRX");
     await sendJson(res, {
       ok: true,
       symbol,
@@ -816,7 +871,7 @@ createServer(async (req, res) => {
     const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
     const interval = url.searchParams.get("interval") || "1d";
     const limit = Math.min(900, Math.max(20, Number(url.searchParams.get("limit") || 120)));
-    const payload = await getChart(symbol, interval, limit);
+    const payload = await getChart(symbol, interval, limit, url.searchParams.get("mode") || "KRX");
     await sendJson(res, {
       ok: true,
       symbol,

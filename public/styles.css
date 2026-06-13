@@ -140,6 +140,35 @@ body {
   white-space: nowrap;
 }
 
+.session-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f7f9fc;
+}
+
+.session-button {
+  height: 22px;
+  min-width: 38px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.session-button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
 .market-item {
   color: var(--muted);
   font-size: 12px;
@@ -181,6 +210,30 @@ body {
   margin-left: 0;
   text-align: left;
   font-variant-numeric: tabular-nums;
+}
+
+.market-session {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  margin-left: 3px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(107, 114, 128, 0.12);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  vertical-align: 1px;
+}
+
+.market-session.up {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+}
+
+.market-session.down {
+  background: rgba(21, 101, 192, 0.12);
+  color: #1565c0;
 }
 
 .chart-grid {

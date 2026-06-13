@@ -1,8 +1,8 @@
 const INITIAL_CHARTS = [
   { symbol: "000660.KS", name: "SK하이닉스", decimals: 0 },
   { symbol: "005930.KS", name: "삼성전자", decimals: 0 },
-  { symbol: "NVDA.US", name: "NVIDIA", decimals: 2 },
-  { symbol: "TSLA.US", name: "Tesla", decimals: 2 }
+  { symbol: "AVGO.US", name: "Broadcom", decimals: 2 },
+  { symbol: "SNDK.US", name: "Sandisk", decimals: 2 }
 ];
 
 const TIMEFRAMES = [
@@ -27,6 +27,8 @@ const MARKET_ITEMS = [
 
 const DEFAULT_INTERVAL = "1d";
 const DEFAULT_LIMIT = 120;
+const STORAGE_KEY = "stock8.selectedCharts.v2";
+const SESSION_MODE_KEY = "stock8.sessionMode.v1";
 const MA_PERIODS = [5, 10, 20, 60, 120, 240];
 const WARMUP_BARS = Math.max(...MA_PERIODS);
 const CHART_PRICE_DECIMALS = 0;
@@ -45,10 +47,12 @@ const MA_COLORS = {
 
 const chartGrid = document.querySelector("#chartGrid");
 const marketSummary = document.querySelector("#marketSummary");
+const sessionButtons = document.querySelectorAll(".session-button");
 const template = document.querySelector("#chart-card-template");
 const chartState = new Map();
 let marketRefreshInFlight = false;
 let chartRefreshInFlight = false;
+let sessionMode = localStorage.getItem(SESSION_MODE_KEY) === "NTX" ? "NTX" : "KRX";
 
 function formatNumber(value, decimals = 2) {
   const number = Number(value);
@@ -76,6 +80,33 @@ function priceDecimalsForSymbol(symbol) {
 function priceFormatForSymbol(symbol) {
   const precision = priceDecimalsForSymbol(symbol);
   return { type: "price", precision, minMove: precision === 2 ? 0.01 : 1 };
+}
+
+function loadSavedCharts() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    if (!Array.isArray(parsed) || parsed.length !== INITIAL_CHARTS.length) return INITIAL_CHARTS;
+    return parsed.map((item, index) => ({
+      symbol: String(item.symbol || INITIAL_CHARTS[index].symbol).toUpperCase(),
+      name: String(item.name || INITIAL_CHARTS[index].name),
+      decimals: Number.isFinite(Number(item.decimals)) ? Number(item.decimals) : INITIAL_CHARTS[index].decimals
+    }));
+  } catch {
+    return INITIAL_CHARTS;
+  }
+}
+
+function saveCharts() {
+  const items = [...chartState.values()].map((state) => state.item);
+  if (items.length === INITIAL_CHARTS.length) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  }
+}
+
+function updateSessionButtons() {
+  sessionButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.mode === sessionMode);
+  });
 }
 
 function formatAxisPrice(value, symbol) {
@@ -407,7 +438,8 @@ async function fetchChart(state) {
     symbol: state.item.symbol,
     name: state.item.name,
     interval: state.interval,
-    limit: String(state.limit + WARMUP_BARS)
+    limit: String(state.limit + WARMUP_BARS),
+    mode: sessionMode
   });
   const response = await fetch(`/api/chart?${params.toString()}`);
   if (!response.ok) throw new Error(`chart ${response.status}`);
@@ -465,6 +497,7 @@ async function showSuggestions(card, query) {
         input.value = item.name;
         input.blur();
         closeSuggestions(card);
+        saveCharts();
         await refreshCard(state, true);
       });
       return button;
@@ -586,9 +619,10 @@ async function createCard(item, index) {
 function renderMarketItem(item, quote) {
   const change = Number(quote.changePercent ?? quote.changeRate ?? 0);
   const direction = change >= 0 ? "up" : "down";
+  const status = quote.marketStatus === "장중" ? "장중" : "장종료";
   const span = document.createElement("span");
   span.className = `market-item ${direction}`;
-  span.innerHTML = `${item.label}<strong>${formatNumber(quote.price, item.decimals)}</strong><span class="market-change">(${formatChange(change, 2)})</span>`;
+  span.innerHTML = `${item.label}<strong>${formatNumber(quote.price, item.decimals)}</strong><span class="market-change">(${formatChange(change, 2)})</span><span class="market-session ${direction}">${status}</span>`;
   return span;
 }
 
@@ -598,7 +632,7 @@ async function loadMarketSummary() {
   try {
     const results = await Promise.all(MARKET_ITEMS.map(async (item) => {
       try {
-        const response = await fetch(`/api/quote?symbol=${encodeURIComponent(item.symbol)}`);
+        const response = await fetch(`/api/quote?symbol=${encodeURIComponent(item.symbol)}&mode=${sessionMode}`);
         return { item, quote: await response.json() };
       } catch {
         return { item, quote: null };
@@ -625,7 +659,19 @@ async function refreshAll(initial = false) {
   }
 }
 
-await Promise.all([loadMarketSummary(), ...INITIAL_CHARTS.map(createCard)]);
+sessionButtons.forEach((button) => {
+  button.addEventListener("click", async () => {
+    const nextMode = button.dataset.mode === "NTX" ? "NTX" : "KRX";
+    if (nextMode === sessionMode) return;
+    sessionMode = nextMode;
+    localStorage.setItem(SESSION_MODE_KEY, sessionMode);
+    updateSessionButtons();
+    await Promise.all([loadMarketSummary(), refreshAll(true)]);
+  });
+});
+
+updateSessionButtons();
+await Promise.all([loadMarketSummary(), ...loadSavedCharts().map(createCard)]);
 
 setInterval(loadMarketSummary, UPDATE_INTERVAL_MS);
 setInterval(() => {

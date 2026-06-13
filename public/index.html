@@ -10,6 +10,10 @@
     <div class="app">
       <header class="app-header">
         <div class="market-summary" id="marketSummary" aria-label="시장 요약"></div>
+        <div class="session-toggle" aria-label="시장 데이터 모드">
+          <button type="button" class="session-button active" data-mode="KRX">KRX</button>
+          <button type="button" class="session-button" data-mode="NTX">NTX</button>
+        </div>
       </header>
       <main class="chart-grid" id="chartGrid"></main>
     </div>
