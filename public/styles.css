@@ -116,7 +116,7 @@ body {
 }
 
 .period-control input {
-  width: 48px;
+  width: 54px;
   height: 20px;
   padding: 2px 6px;
   border: 1px solid var(--border);
@@ -352,12 +352,12 @@ body {
   line-height: 1;
 }
 
-.market-status.open {
+.market-status.up {
   background: rgba(220, 38, 38, 0.12);
   color: #dc2626;
 }
 
-.market-status.closed {
+.market-status.down {
   background: rgba(21, 101, 192, 0.12);
   color: #1565c0;
 }

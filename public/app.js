@@ -345,7 +345,7 @@ function renderLegend(state, payload) {
   priceEl.className = `last-price ${direction}`;
   const statusEl = card.querySelector(".market-status");
   statusEl.textContent = payload.marketStatus || "종가";
-  statusEl.className = `market-status ${payload.marketStatus === "장중" ? "open" : "closed"}`;
+  statusEl.className = `market-status ${direction}`;
   card.querySelector(".last-change").textContent = formatChange(changePct, 2);
   card.querySelector(".last-change").className = `last-change ${direction}`;
 }
