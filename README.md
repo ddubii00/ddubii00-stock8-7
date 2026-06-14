@@ -41,3 +41,18 @@ Codespaces Secret은 터미널 환경변수로 자동 주입됩니다. GitHub Ac
 ## 로컬 테스트
 
 로컬에서는 `.env.example`을 참고해서 직접 환경변수를 export한 뒤 실행합니다. `.env` 파일을 만들 경우 `.gitignore`에 의해 커밋되지 않습니다.
+
+## Oracle 서버 실행
+
+Oracle Cloud VM에서는 Node.js 20 이상을 설치한 뒤 저장소를 받아 실행합니다. KIS 키는 저장소에 커밋하지 말고 서버의 `.env` 파일 또는 systemd 환경변수로만 설정합니다.
+
+```bash
+git clone https://github.com/ddubii00/ddubii00-stock8-7.git
+cd ddubii00-stock8-7
+npm install
+cp .env.example .env
+# .env에 KIS_APP_KEY, KIS_APP_SECRET, PORT를 설정
+npm start
+```
+
+외부 접속이 필요하면 Oracle 보안 목록/NSG와 서버 방화벽에서 `PORT` 값을 허용합니다. 기본 예시는 `PORT=8002`입니다.

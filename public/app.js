@@ -247,6 +247,70 @@ function rowByTime(state, time) {
   return state.rows.find((row) => row.time === time);
 }
 
+function marketDateKey(symbol, time) {
+  const date = typeof time === "number" ? new Date(time * 1000) : new Date(time);
+  const timeZone = isKoreanSymbol(symbol) ? "Asia/Seoul" : "America/New_York";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+function marketMinute(symbol, time) {
+  const date = typeof time === "number" ? new Date(time * 1000) : new Date(time);
+  const timeZone = isKoreanSymbol(symbol) ? "Asia/Seoul" : "America/New_York";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+  return Number(parts.hour) * 60 + Number(parts.minute);
+}
+
+function isRegularSessionRow(symbol, row) {
+  const minute = marketMinute(symbol, row.time);
+  if (isKoreanSymbol(symbol)) return minute >= 9 * 60 && minute <= 15 * 60 + 30;
+  return minute >= 9 * 60 + 30 && minute <= 16 * 60;
+}
+
+function sameMarketDateRows(state, row) {
+  const key = marketDateKey(state.item.symbol, row.time);
+  return state.rows.filter((candidate) => marketDateKey(state.item.symbol, candidate.time) === key);
+}
+
+function regularOpenForRow(state, row) {
+  if (!isIntraday(state.interval)) return row.open;
+  const dayRows = sameMarketDateRows(state, row);
+  return (dayRows.find((candidate) => isRegularSessionRow(state.item.symbol, candidate)) || dayRows[0] || row).open;
+}
+
+function previousRegularCloseForRow(state, row) {
+  const index = state.rows.findIndex((candidate) => candidate.time === row.time);
+  if (!isIntraday(state.interval)) return Number(state.rows[index - 1]?.close);
+  if (Number.isFinite(Number(state.previousClose))) return Number(state.previousClose);
+  const currentKey = marketDateKey(state.item.symbol, row.time);
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const candidate = state.rows[i];
+    if (marketDateKey(state.item.symbol, candidate.time) !== currentKey && isRegularSessionRow(state.item.symbol, candidate)) {
+      return Number(candidate.close);
+    }
+  }
+  return NaN;
+}
+
+function tooltipValues(state, row) {
+  const open = regularOpenForRow(state, row);
+  const close = row.close;
+  const previousClose = previousRegularCloseForRow(state, row);
+  const changePct = Number.isFinite(previousClose) && previousClose !== 0
+    ? ((close - previousClose) / previousClose) * 100
+    : NaN;
+  return { open, close, changePct };
+}
+
 function showTooltip(state, param) {
   const tooltip = state.card.querySelector(".price-tooltip");
   if (!param?.time || !param.point || param.point.x < 0 || param.point.y < 0) {
@@ -261,12 +325,12 @@ function showTooltip(state, param) {
   }
 
   const decimals = priceDecimalsForSymbol(state.item.symbol);
-  const changePct = row.open ? ((row.close - row.open) / row.open) * 100 : 0;
-  const direction = changePct >= 0 ? "up" : "down";
+  const { open, close, changePct } = tooltipValues(state, row);
+  const direction = !Number.isFinite(changePct) || changePct >= 0 ? "up" : "down";
   tooltip.innerHTML = `
     <div class="tooltip-date">${formatTooltipTime(state.interval, row.time)}</div>
-    <div class="tooltip-row"><span>시가</span><strong>${formatNumber(row.open, decimals)}</strong></div>
-    <div class="tooltip-row"><span>종가</span><strong>${formatNumber(row.close, decimals)}</strong></div>
+    <div class="tooltip-row"><span>시가</span><strong>${formatNumber(open, decimals)}</strong></div>
+    <div class="tooltip-row"><span>종가</span><strong>${formatNumber(close, decimals)}</strong></div>
     <div class="tooltip-row ${direction}"><span>등락률</span><strong>${formatChange(changePct, 2)}</strong></div>
   `;
 
@@ -399,6 +463,7 @@ function applyPayload(state, payload, initial = false) {
 
   state.rows = rows;
   state.macd = calcMacd(rows);
+  state.previousClose = Number(payload.previousClose);
   const priceFormat = priceFormatForSymbol(state.item.symbol);
   state.instance.chart.applyOptions({
     localization: {
