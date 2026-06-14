@@ -45,11 +45,12 @@ body {
 
 .app-header {
   z-index: 10;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   flex-shrink: 0;
   align-items: center;
   justify-content: flex-start;
-  gap: 16px;
+  column-gap: 22px;
   min-height: 32px;
   padding: 4px 12px;
   border-bottom: 1px solid var(--border);
@@ -132,12 +133,10 @@ body {
 
 .market-summary {
   display: flex;
-  flex: 1;
   align-items: baseline;
   justify-content: flex-start;
   gap: 6px;
   min-width: 0;
-  padding-right: 16px;
   overflow: hidden;
   text-align: left;
   white-space: nowrap;
@@ -147,7 +146,6 @@ body {
   display: inline-flex;
   flex-shrink: 0;
   gap: 2px;
-  margin-left: auto;
   padding: 2px;
   border: 1px solid var(--border);
   border-radius: 6px;

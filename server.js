@@ -696,18 +696,51 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
   try {
+    const useNtxQuote = mode === "NTX" && isUsSymbol(normalized);
     let liveQuote = null;
-    try {
-      liveQuote = await fetchKisQuote(normalized);
-    } catch {
-      liveQuote = null;
+    if (!useNtxQuote) {
+      try {
+        liveQuote = await fetchKisQuote(normalized);
+      } catch {
+        liveQuote = null;
+      }
     }
-    const includePrePost = mode === "NTX" && isUsSymbol(normalized) && isIntradayInterval(interval);
+    const includePrePost = useNtxQuote && isIntradayInterval(interval);
     const range = includePrePost ? "1d" : config.range;
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=${includePrePost ? "true" : "false"}`;
     const response = await fetchWithTimeout(url, 4500);
     if (!response.ok) throw new Error(`Yahoo HTTP ${response.status}`);
     const payload = parseYahooChart(normalized, await response.json());
+    if (useNtxQuote && !isIntradayInterval(interval)) {
+      try {
+        const ntxPayload = await getIntraday(normalized, "1m", "NTX");
+        const latestNtx = ntxPayload.series.at(-1);
+        if (latestNtx) {
+          payload.price = latestNtx.close;
+          payload.previousClose = ntxPayload.previousClose;
+          payload.change = payload.price - payload.previousClose;
+          payload.changePercent = Number.isFinite(payload.previousClose) && payload.previousClose !== 0
+            ? (payload.change / payload.previousClose) * 100
+            : payload.changePercent;
+          payload.asOf = latestNtx.time;
+          payload.marketTime = latestNtx.time;
+          payload.source = "yahoo-ntx";
+        }
+      } catch {
+        // Keep the regular Yahoo chart payload if extended-hours lookup fails.
+      }
+    }
+    if (useNtxQuote && isIntradayInterval(interval) && payload.series.length) {
+      const latestNtx = payload.series.at(-1);
+      payload.price = latestNtx.close;
+      payload.change = Number.isFinite(payload.previousClose) ? payload.price - payload.previousClose : payload.change;
+      payload.changePercent = Number.isFinite(payload.previousClose) && payload.previousClose !== 0
+        ? (payload.change / payload.previousClose) * 100
+        : payload.changePercent;
+      payload.asOf = latestNtx.time;
+      payload.marketTime = latestNtx.time;
+      payload.source = "yahoo-ntx";
+    }
     if (liveQuote) {
       payload.price = liveQuote.price;
       payload.previousClose = liveQuote.previousClose;
@@ -787,10 +820,12 @@ async function getCandles(symbol, limit = 140) {
 
 async function getQuote(symbol, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
-  try {
-    return await fetchKisQuote(normalized);
-  } catch {
-    // Keep the dashboard usable when KIS credentials are missing or the API is temporarily unavailable.
+  if (!(mode === "NTX" && isUsSymbol(normalized))) {
+    try {
+      return await fetchKisQuote(normalized);
+    } catch {
+      // Keep the dashboard usable when KIS credentials are missing or the API is temporarily unavailable.
+    }
   }
   const intraday = await getIntraday(normalized, "1m", mode);
   return {
