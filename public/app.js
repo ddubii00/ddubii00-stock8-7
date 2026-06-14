@@ -506,7 +506,7 @@ async function fetchChart(state) {
     limit: String(state.limit + WARMUP_BARS),
     mode: sessionMode
   });
-  const response = await fetch(`/api/chart?${params.toString()}`);
+  const response = await fetch(`/stock8-7/api/chart?${params.toString()}`);
   if (!response.ok) throw new Error(`chart ${response.status}`);
   return response.json();
 }
@@ -541,7 +541,7 @@ document.addEventListener("pointerdown", (event) => {
 
 async function showSuggestions(card, query) {
   const suggestions = card.querySelector(".suggestions");
-  const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+  const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(query)}`);
   const json = await response.json();
   suggestions.replaceChildren(
     ...json.results.map((item) => {
@@ -697,7 +697,7 @@ async function loadMarketSummary() {
   try {
     const results = await Promise.all(MARKET_ITEMS.map(async (item) => {
       try {
-        const response = await fetch(`/api/quote?symbol=${encodeURIComponent(item.symbol)}&mode=${sessionMode}`);
+        const response = await fetch(`/stock8-7/api/quote?symbol=${encodeURIComponent(item.symbol)}&mode=${sessionMode}`);
         return { item, quote: await response.json() };
       } catch {
         return { item, quote: null };
