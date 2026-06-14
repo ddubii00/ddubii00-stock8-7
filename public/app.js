@@ -52,7 +52,7 @@ const template = document.querySelector("#chart-card-template");
 const chartState = new Map();
 let marketRefreshInFlight = false;
 let chartRefreshInFlight = false;
-let sessionMode = localStorage.getItem(SESSION_MODE_KEY) === "NTX" ? "NTX" : "KRX";
+let sessionMode = "KRX";
 
 function formatNumber(value, decimals = 2) {
   const number = Number(value);
