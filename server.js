@@ -232,6 +232,26 @@ function isForexSymbol(symbol) {
   return symbol === "KRW=X";
 }
 
+function kisSupportsQuote(symbol, mode = "KRX") {
+  const normalized = symbol.trim().toUpperCase();
+  if (mode === "NTX" && isUsSymbol(normalized)) return false;
+  return isKoreanSymbol(normalized) || isKoreanIndex(normalized) || isUsSymbol(normalized);
+}
+
+function kisStatusPayload() {
+  return {
+    enabled: KIS_ENABLED,
+    appKeyConfigured: Boolean(KIS_APP_KEY),
+    appSecretConfigured: Boolean(KIS_APP_SECRET),
+    baseUrlConfigured: Boolean(KIS_BASE_URL)
+  };
+}
+
+function kisErrorMessage(error) {
+  const message = error instanceof Error ? error.message : String(error || "Unknown KIS error");
+  return message.slice(0, 180);
+}
+
 function isIntradayInterval(interval) {
   return !["1d", "1wk", "1mo"].includes(interval);
 }
@@ -902,13 +922,22 @@ async function getIntraday(symbol, interval = "1m", mode = "KRX") {
 async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
+  let kisMeta = {
+    ...kisStatusPayload(),
+    supported: kisSupportsQuote(normalized, mode),
+    attempted: false,
+    ok: false
+  };
   try {
     const useNtxQuote = mode === "NTX" && isUsSymbol(normalized);
     let liveQuote = null;
-    if (!useNtxQuote) {
+    if (KIS_ENABLED && kisMeta.supported && !useNtxQuote) {
+      kisMeta.attempted = true;
       try {
         liveQuote = await fetchKisQuote(normalized);
-      } catch {
+        kisMeta.ok = true;
+      } catch (error) {
+        kisMeta.error = kisErrorMessage(error);
         liveQuote = null;
       }
     }
@@ -957,6 +986,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       payload.marketTime = liveQuote.marketTime;
       payload.marketStatus = liveQuote.marketStatus;
       payload.source = liveQuote.source;
+      payload.kis = kisMeta;
     }
     if (!payload.series.length) throw new Error("No chart data");
     let series = isIntradayInterval(interval)
@@ -989,10 +1019,12 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       change,
       changePercent: liveQuote?.changePercent ?? (Number.isFinite(previousClose) && previousClose !== 0 ? (change / previousClose) * 100 : 0),
       marketStatus: payload.marketStatus || marketStatus(normalized),
-      source: payload.source || "yahoo-or-sample",
+      source: payload.source || (kisMeta.attempted && !kisMeta.ok ? "fallback-after-kis-error" : "yahoo-or-sample"),
+      kis: kisMeta,
       series: trimmed
     };
-  } catch {
+  } catch (error) {
+    if (kisMeta.attempted && !kisMeta.ok && !kisMeta.error) kisMeta.error = kisErrorMessage(error);
     const series = fallbackCandles(normalized, limit, config.seconds);
     const previousClose = series.length > 1 ? series.at(-2).close : series[0].open;
     const price = series.at(-1).close;
@@ -1005,7 +1037,8 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       changePercent: previousClose ? (change / previousClose) * 100 : 0,
       asOf: series.at(-1).time,
       marketStatus: marketStatus(normalized),
-      source: "fallback",
+      source: kisMeta.attempted && !kisMeta.ok ? "fallback-after-kis-error" : "fallback",
+      kis: kisMeta,
       series
     };
   }
@@ -1027,11 +1060,21 @@ async function getCandles(symbol, limit = 140) {
 
 async function getQuote(symbol, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
-  if (!(mode === "NTX" && isUsSymbol(normalized))) {
+  const kisMeta = {
+    ...kisStatusPayload(),
+    supported: kisSupportsQuote(normalized, mode),
+    attempted: false,
+    ok: false
+  };
+  if (KIS_ENABLED && kisMeta.supported) {
+    kisMeta.attempted = true;
     try {
-      return await fetchKisQuote(normalized);
-    } catch {
-      // Keep the dashboard usable when KIS credentials are missing or the API is temporarily unavailable.
+      return {
+        ...(await fetchKisQuote(normalized)),
+        kis: { ...kisMeta, ok: true }
+      };
+    } catch (error) {
+      kisMeta.error = kisErrorMessage(error);
     }
   }
   const intraday = await getIntraday(normalized, "1m", mode);
@@ -1045,7 +1088,8 @@ async function getQuote(symbol, mode = "KRX") {
     changeRate: intraday.changePercent,
     asOf: intraday.asOf,
     marketStatus: marketStatus(normalized),
-    source: "yahoo-or-sample"
+    source: kisMeta.attempted && !kisMeta.ok ? "fallback-after-kis-error" : "yahoo-or-sample",
+    kis: kisMeta
   };
 }
 
@@ -1081,7 +1125,7 @@ createServer(async (req, res) => {
   const pathname = appPathname(url);
 
   if (pathname === "/health") {
-    await sendJson(res, { status: "ok" });
+    await sendJson(res, { status: "ok", kis: kisStatusPayload() });
     return;
   }
 
@@ -1144,4 +1188,5 @@ createServer(async (req, res) => {
   await serveStatic(req, res);
 }).listen(PORT, () => {
   console.log(`stock8 four-candle dashboard: http://127.0.0.1:${PORT}`);
+  console.log(`KIS realtime: ${KIS_ENABLED ? "enabled" : "disabled"}`);
 });
