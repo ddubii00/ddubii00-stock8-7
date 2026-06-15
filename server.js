@@ -263,7 +263,10 @@ function yahooSymbol(symbol) {
 
 function numericField(...values) {
   for (const value of values) {
-    const number = Number(String(value ?? "").replace(/,/g, ""));
+    if (value == null) continue;
+    const text = String(value).replace(/,/g, "").trim();
+    if (!text) continue;
+    const number = Number(text);
     if (Number.isFinite(number)) return number;
   }
   return NaN;
@@ -389,11 +392,21 @@ function parseKisDomesticQuote(symbol, json) {
 }
 
 function parseKisIndexQuote(symbol, json) {
-  const output = json.output || {};
-  const price = numericField(output.bstp_nmix_prpr, output.bstp_nmix, output.stck_prpr);
-  let previousClose = numericField(output.prdy_clpr, output.bstp_nmix_prdy_clpr, output.stck_prdy_clpr);
-  const change = numericField(output.prdy_vrss, Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : NaN);
-  const changePercent = numericField(output.prdy_ctrt);
+  const output = Array.isArray(json.output) ? json.output[0] || {} : json.output || json.output1 || {};
+  const price = numericField(output.bstp_nmix_prpr, output.bstp_nmix, output.stck_prpr, output.prpr, output.nmix);
+  let previousClose = numericField(
+    output.bstp_nmix_prdy_clpr,
+    output.prdy_clpr,
+    output.stck_prdy_clpr,
+    output.sdpr
+  );
+  const change = numericField(
+    output.bstp_nmix_prdy_vrss,
+    output.prdy_vrss,
+    output.stck_prdy_vrss,
+    Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : NaN
+  );
+  const changePercent = numericField(output.bstp_nmix_prdy_ctrt, output.prdy_ctrt, output.stck_prdy_ctrt);
   if ((!Number.isFinite(previousClose) || previousClose <= 0) && Number.isFinite(price) && Number.isFinite(change)) {
     previousClose = price - change;
   }
@@ -436,6 +449,13 @@ function parseKisOverseasQuote(symbol, json) {
   };
 }
 
+function validateKisQuote(quote) {
+  if (!Number.isFinite(Number(quote.price)) || Number(quote.price) <= 0) {
+    throw new Error(`KIS quote invalid price for ${quote.symbol}`);
+  }
+  return quote;
+}
+
 async function fetchKisQuote(symbol) {
   const normalized = symbol.trim().toUpperCase();
   if (isKoreanIndex(normalized)) {
@@ -443,7 +463,7 @@ async function fetchKisQuote(symbol) {
       FID_COND_MRKT_DIV_CODE: "U",
       FID_INPUT_ISCD: kisIndexCode(normalized)
     });
-    return parseKisIndexQuote(normalized, json);
+    return validateKisQuote(parseKisIndexQuote(normalized, json));
   }
   if (isKoreanSymbol(normalized)) {
     const code = normalized.split(".")[0];
@@ -451,7 +471,7 @@ async function fetchKisQuote(symbol) {
       FID_COND_MRKT_DIV_CODE: "J",
       FID_INPUT_ISCD: code
     });
-    return parseKisDomesticQuote(normalized, json);
+    return validateKisQuote(parseKisDomesticQuote(normalized, json));
   }
   if (normalized.endsWith(".US")) {
     const code = normalized.replace(".US", "");
@@ -464,7 +484,7 @@ async function fetchKisQuote(symbol) {
           EXCD: exchangeCode,
           SYMB: code
         });
-        return parseKisOverseasQuote(normalized, json);
+        return validateKisQuote(parseKisOverseasQuote(normalized, json));
       } catch (error) {
         lastError = error;
       }
@@ -756,6 +776,15 @@ function compactText(value) {
   return String(value || "").toLowerCase().replace(/\s+/g, "");
 }
 
+function decodeHtml(value = "") {
+  return String(value)
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
 function staticSearch(query) {
   const q = query.trim().toLowerCase();
   const compact = compactText(q);
@@ -843,6 +872,44 @@ async function searchKoreanSymbols(query) {
   }
 }
 
+function suffixFromText(text = "") {
+  if (/코스닥|KOSDAQ/i.test(text)) return ".KQ";
+  if (/코스피|KOSPI/i.test(text)) return ".KS";
+  return "";
+}
+
+async function fetchNaverItemMeta(code, fallbackName = code, suffixHint = "") {
+  try {
+    const response = await fetchWithTimeout(`https://finance.naver.com/item/main.naver?code=${encodeURIComponent(code)}`, 1800);
+    if (!response.ok) throw new Error(`Naver item HTTP ${response.status}`);
+    const html = await response.text();
+    const title = decodeHtml(html.match(/<title>\s*([^:<]+?)\s*[:<]/i)?.[1] || fallbackName).trim();
+    const suffix = suffixHint || ".KS";
+    return { symbol: `${code}${suffix}`, name: title || fallbackName };
+  } catch {
+    return { symbol: `${code}${suffixHint || ".KS"}`, name: fallbackName };
+  }
+}
+
+async function searchNaverWebSymbols(query) {
+  if (!/[가-힣]|\d{6}/.test(query)) return [];
+  const url = `https://search.naver.com/search.naver?query=${encodeURIComponent(`${query} 주가`)}`;
+  try {
+    const response = await fetchWithTimeout(url, 2200);
+    if (!response.ok) return [];
+    const html = await response.text();
+    const byCode = new Map();
+    for (const match of html.matchAll(/(.{0,300})item\/main\.naver\?code=(\d{6})(.{0,300})/g)) {
+      const [, before, code, after] = match;
+      if (!byCode.has(code)) byCode.set(code, suffixFromText(`${before} ${after}`));
+    }
+    const items = [...byCode.entries()].slice(0, 6);
+    return Promise.all(items.map(([code, suffixHint]) => fetchNaverItemMeta(code, query, suffixHint)));
+  } catch {
+    return [];
+  }
+}
+
 async function searchUsSymbols(query) {
   if (!/[a-zA-Z]/.test(query)) return [];
   const usExchanges = new Set(["NYQ", "NYS", "NMS", "NGM", "NCM", "NAS", "ASE", "PCX", "BTS"]);
@@ -867,11 +934,12 @@ async function searchUsSymbols(query) {
 
 async function searchSymbols(query) {
   const staticMatches = staticSearch(query);
-  const [koreanMatches, usMatches] = await Promise.all([
+  const [koreanMatches, naverWebMatches, usMatches] = await Promise.all([
     searchKoreanSymbols(query),
+    searchNaverWebSymbols(query),
     searchUsSymbols(query)
   ]);
-  return mergeSearchResults(staticMatches, koreanMatches, usMatches);
+  return mergeSearchResults(staticMatches, koreanMatches, naverWebMatches, usMatches);
 }
 
 function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {

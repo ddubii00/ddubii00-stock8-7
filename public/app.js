@@ -135,7 +135,6 @@ function isIntraday(interval) {
 }
 
 function minimumLimitForInterval(interval) {
-  if (interval === "1m") return 390;
   return 20;
 }
 
@@ -156,6 +155,11 @@ function calcSma(rows, period) {
     result.push({ time: rows[i].time, value: sum / period });
   }
   return result;
+}
+
+function calcVisibleSma(state, period) {
+  const visibleTimes = new Set((state.rows || []).map((row) => row.time));
+  return calcSma(state.sourceRows || state.rows || [], period).filter((row) => visibleTimes.has(row.time));
 }
 
 function ema(values, period) {
@@ -434,7 +438,7 @@ function updateSeriesVisibility(state) {
   const { instance, visible } = state;
   instance.candleSeries.setData(visible.candle ? state.rows : []);
   for (const period of MA_PERIODS) {
-    instance.maSeries[period].setData(visible[`ma${period}`] ? calcSma(state.rows, period) : []);
+    instance.maSeries[period].setData(visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
   }
 }
 
@@ -461,11 +465,14 @@ function renderLegend(state, payload) {
 }
 
 function applyPayload(state, payload, initial = false) {
-  const rows = payload.series || [];
-  if (!rows.length) return;
+  const sourceRows = payload.series || [];
+  if (!sourceRows.length) return;
   const previousLastTime = state.rows?.at(-1)?.time;
+  const rows = sourceRows.slice(-state.limit);
   const latest = rows.at(-1);
+  if (!rows.length) return;
 
+  state.sourceRows = sourceRows;
   state.rows = rows;
   state.macd = calcMacd(rows);
   state.previousClose = Number(payload.previousClose);
@@ -494,7 +501,7 @@ function applyPayload(state, payload, initial = false) {
   }
 
   for (const period of MA_PERIODS) {
-    state.instance.maSeries[period].setData(state.visible[`ma${period}`] ? calcSma(rows, period) : []);
+    state.instance.maSeries[period].setData(state.visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
   }
 
   renderLegend(state, payload);
@@ -564,8 +571,11 @@ async function showSuggestions(card, query) {
   const suggestions = card.querySelector(".suggestions");
   const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(query)}`);
   const json = await response.json();
+  const manualItem = manualSearchItem(query);
+  const results = [...(json.results || [])];
+  if (manualItem && !results.some((item) => item.symbol === manualItem.symbol)) results.push(manualItem);
   suggestions.replaceChildren(
-    ...json.results.map((item) => {
+    ...results.map((item) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "suggestion";
@@ -577,7 +587,20 @@ async function showSuggestions(card, query) {
       return button;
     })
   );
-  suggestions.classList.toggle("open", json.results.length > 0);
+  suggestions.classList.toggle("open", results.length > 0);
+}
+
+function manualSearchItem(query) {
+  const raw = String(query || "").trim();
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+  if (/^\d{6}$/.test(raw)) return { symbol: `${raw}.KS`, name: raw };
+  if (/^\d{6}\.(KS|KQ)$/i.test(raw)) return { symbol: upper, name: raw.slice(0, 6) };
+  if (/^[A-Z][A-Z0-9.-]{0,9}(\.US)?$/i.test(raw)) {
+    const ticker = upper.endsWith(".US") ? upper.slice(0, -3) : upper;
+    return { symbol: `${ticker}.US`, name: ticker };
+  }
+  return null;
 }
 
 function bindSearch(card) {
@@ -603,7 +626,8 @@ function bindSearch(card) {
     }
     const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(input.value)}`);
     const json = await response.json();
-    if (json.results?.[0]) await selectSearchItem(card, json.results[0]);
+    const item = json.results?.[0] || manualSearchItem(input.value);
+    if (item) await selectSearchItem(card, item);
   });
   input.addEventListener("blur", () => {
     setTimeout(() => {
@@ -674,6 +698,7 @@ async function createCard(item, index) {
     item,
     interval: DEFAULT_INTERVAL,
     limit: DEFAULT_LIMIT,
+    sourceRows: [],
     rows: [],
     macd: [],
     visible: {
