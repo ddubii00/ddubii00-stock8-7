@@ -22,6 +22,8 @@ const MIME = {
 const SYMBOL_NAMES = {
   "000660.KS": "SK하이닉스",
   "005930.KS": "삼성전자",
+  "009150.KS": "삼성전기",
+  "018260.KS": "삼성에스디에스",
   "035420.KS": "NAVER",
   "035720.KS": "카카오",
   "003550.KS": "LG",
@@ -32,6 +34,12 @@ const SYMBOL_NAMES = {
   "011070.KS": "LG이노텍",
   "034220.KS": "LG디스플레이",
   "373220.KS": "LG에너지솔루션",
+  "006260.KS": "LS",
+  "010120.KS": "LS ELECTRIC",
+  "000680.KS": "LS네트웍스",
+  "229640.KS": "LS에코에너지",
+  "060370.KQ": "LS마린솔루션",
+  "417200.KQ": "LS머트리얼즈",
   "207940.KS": "삼성바이오로직스",
   "005380.KS": "현대차",
   "000270.KS": "기아",
@@ -49,6 +57,9 @@ const SYMBOL_NAMES = {
   "GOOGL.US": "Alphabet",
   "AMD.US": "AMD",
   "AVGO.US": "Broadcom",
+  "F.US": "Ford",
+  "CPNG.US": "Coupang",
+  "SPCX.US": "SPCX ETF",
   "SNDK.US": "Sandisk",
   "KRW=X": "달러/원",
   "^KS11": "KOSPI",
@@ -61,10 +72,13 @@ const US_EXCHANGE_CODES = {
   AMD: "NAS",
   AMZN: "NAS",
   AVGO: "NAS",
+  CPNG: "NYS",
+  F: "NYS",
   GOOGL: "NAS",
   META: "NAS",
   MSFT: "NAS",
   NVDA: "NAS",
+  SPCX: "NAS",
   SNDK: "NAS",
   TSLA: "NAS"
 };
@@ -72,6 +86,8 @@ const US_EXCHANGE_CODES = {
 const STOOQ_SYMBOLS = {
   "000660.KS": "000660.kr",
   "005930.KS": "005930.kr",
+  "009150.KS": "009150.kr",
+  "018260.KS": "018260.kr",
   "035420.KS": "035420.kr",
   "035720.KS": "035720.kr",
   "003550.KS": "003550.kr",
@@ -82,6 +98,12 @@ const STOOQ_SYMBOLS = {
   "011070.KS": "011070.kr",
   "034220.KS": "034220.kr",
   "373220.KS": "373220.kr",
+  "006260.KS": "006260.kr",
+  "010120.KS": "010120.kr",
+  "000680.KS": "000680.kr",
+  "229640.KS": "229640.kr",
+  "060370.KQ": "060370.kr",
+  "417200.KQ": "417200.kr",
   "207940.KS": "207940.kr",
   "005380.KS": "005380.kr",
   "000270.KS": "000270.kr",
@@ -95,6 +117,9 @@ const STOOQ_SYMBOLS = {
   "AAPL.US": "aapl.us",
   "MSFT.US": "msft.us",
   "AVGO.US": "avgo.us",
+  "F.US": "f.us",
+  "CPNG.US": "cpng.us",
+  "SPCX.US": "spcx.us",
   "SNDK.US": "sndk.us",
   "KRW=X": "usdkrw",
   "^KS11": "^kospi",
@@ -106,6 +131,8 @@ const STOOQ_SYMBOLS = {
 const SYMBOL_SEARCH = [
   { symbol: "000660.KS", name: "SK하이닉스", aliases: ["하닉", "하이닉스", "sk hynix", "hynix"] },
   { symbol: "005930.KS", name: "삼성전자", aliases: ["삼전", "삼성", "samsung"] },
+  { symbol: "009150.KS", name: "삼성전기", aliases: ["삼성전기", "전기", "samsung electro-mechanics", "semco"] },
+  { symbol: "018260.KS", name: "삼성에스디에스", aliases: ["삼성에스디에스", "삼성sds", "에스디에스", "samsung sds", "sds"] },
   { symbol: "035420.KS", name: "NAVER", aliases: ["네이버", "naver"] },
   { symbol: "035720.KS", name: "카카오", aliases: ["kakao"] },
   { symbol: "003550.KS", name: "LG", aliases: ["lg", "엘지", "lg지주"] },
@@ -116,6 +143,12 @@ const SYMBOL_SEARCH = [
   { symbol: "011070.KS", name: "LG이노텍", aliases: ["lg이노텍", "엘지이노텍", "이노텍", "lg innotek"] },
   { symbol: "034220.KS", name: "LG디스플레이", aliases: ["lg디스플레이", "엘지디스플레이", "디스플레이", "lg display"] },
   { symbol: "373220.KS", name: "LG에너지솔루션", aliases: ["lg엔솔", "엘지엔솔", "엔솔", "lg에너지", "lg energy"] },
+  { symbol: "006260.KS", name: "LS", aliases: ["ls", "엘에스", "ls홀딩스"] },
+  { symbol: "010120.KS", name: "LS ELECTRIC", aliases: ["ls electric", "ls일렉트릭", "엘에스일렉트릭", "ls전기"] },
+  { symbol: "000680.KS", name: "LS네트웍스", aliases: ["ls네트웍스", "엘에스네트웍스", "ls networks"] },
+  { symbol: "229640.KS", name: "LS에코에너지", aliases: ["ls에코에너지", "엘에스에코에너지", "ls eco energy"] },
+  { symbol: "060370.KQ", name: "LS마린솔루션", aliases: ["ls마린솔루션", "엘에스마린솔루션", "ls marine solution"] },
+  { symbol: "417200.KQ", name: "LS머트리얼즈", aliases: ["ls머트리얼즈", "엘에스머트리얼즈", "ls materials"] },
   { symbol: "207940.KS", name: "삼성바이오로직스", aliases: ["삼바", "바이오로직스"] },
   { symbol: "005380.KS", name: "현대차", aliases: ["현차", "hyundai"] },
   { symbol: "000270.KS", name: "기아", aliases: ["kia"] },
@@ -133,6 +166,9 @@ const SYMBOL_SEARCH = [
   { symbol: "GOOGL.US", name: "Alphabet", aliases: ["구글", "google", "alphabet"] },
   { symbol: "AMD.US", name: "AMD", aliases: ["amd"] },
   { symbol: "AVGO.US", name: "Broadcom", aliases: ["브로드컴", "broadcom", "avgo", "avg"] },
+  { symbol: "F.US", name: "Ford", aliases: ["f", "ford", "포드", "for"] },
+  { symbol: "CPNG.US", name: "Coupang", aliases: ["coupang", "쿠팡", "cpng", "cou"] },
+  { symbol: "SPCX.US", name: "SPCX ETF", aliases: ["spcx", "spacex", "space x", "space-x"] },
   { symbol: "SNDK.US", name: "Sandisk", aliases: ["샌디스크", "sandisk", "sndk"] }
 ];
 
@@ -140,6 +176,9 @@ const FALLBACK_BASE = {
   "000660.KS": { price: 310000, step: 2600 },
   "005930.KS": { price: 74600, step: 730 },
   "AVGO.US": { price: 1785.25, step: 18.5 },
+  "F.US": { price: 12.5, step: 0.2 },
+  "CPNG.US": { price: 28.5, step: 0.5 },
+  "SPCX.US": { price: 35.5, step: 0.4 },
   "SNDK.US": { price: 905.5, step: 12.4 },
   "NVDA.US": { price: 214.75, step: 3.1 },
   "TSLA.US": { price: 423.7, step: 6.4 },
@@ -150,7 +189,7 @@ const FALLBACK_BASE = {
 };
 
 const INTERVAL_CONFIG = {
-  "1m": { yahooInterval: "1m", range: "1d", seconds: 60 },
+  "1m": { yahooInterval: "1m", range: "5d", seconds: 60 },
   "3m": { yahooInterval: "1m", range: "5d", seconds: 180, aggregate: 180 },
   "5m": { yahooInterval: "5m", range: "5d", seconds: 300 },
   "10m": { yahooInterval: "1m", range: "5d", seconds: 600, aggregate: 600 },
@@ -189,6 +228,10 @@ function isUsSymbol(symbol) {
   return symbol.endsWith(".US");
 }
 
+function isForexSymbol(symbol) {
+  return symbol === "KRW=X";
+}
+
 function isIntradayInterval(interval) {
   return !["1d", "1wk", "1mo"].includes(interval);
 }
@@ -207,7 +250,28 @@ function numericField(...values) {
   return NaN;
 }
 
+function forexMarketStatus(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+  const minute = Number(parts.hour) * 60 + Number(parts.minute);
+  const weekday = parts.weekday;
+  const open = weekday === "Sun"
+    ? minute >= 17 * 60
+    : weekday === "Sat"
+      ? false
+      : weekday === "Fri"
+        ? minute < 17 * 60
+        : true;
+  return open ? "장중" : "장종료";
+}
+
 function marketStatus(symbol, now = new Date()) {
+  if (isForexSymbol(symbol)) return forexMarketStatus(now);
   if (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: "Asia/Seoul",
@@ -660,6 +724,128 @@ async function fetchWithTimeout(url, timeoutMs = 3500, options = {}) {
   }
 }
 
+function compactText(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, "");
+}
+
+function staticSearch(query) {
+  const q = query.trim().toLowerCase();
+  const compact = compactText(q);
+  if (!compact) return [];
+  const sixDigit = compact.match(/^\d{6}$/);
+  const exactSymbol = SYMBOL_NAMES[`${compact}.KQ`] && !SYMBOL_NAMES[`${compact}.KS`] ? `${compact}.KQ` : `${compact}.KS`;
+  const exactCode = sixDigit
+    ? [{ symbol: exactSymbol, name: SYMBOL_NAMES[exactSymbol] || compact }]
+    : [];
+  const matches = SYMBOL_SEARCH
+    .map((item) => {
+      const values = [item.symbol.replace(".US", ""), item.symbol.replace(/\.(KS|KQ|US)$/, ""), item.name, ...(item.aliases || [])];
+      const compactValues = values.map(compactText);
+      let score = 99;
+      if (compactValues.some((value) => value === compact)) score = 0;
+      else if (compactValues.some((value) => value.startsWith(compact))) score = 1;
+      else if (compactValues.some((value) => value.includes(compact))) score = 2;
+      return { item, score };
+    })
+    .filter(({ score }) => score < 99)
+    .sort((a, b) => a.score - b.score || a.item.name.localeCompare(b.item.name))
+    .map(({ item }) => item);
+  return [...exactCode, ...matches];
+}
+
+function mergeSearchResults(...groups) {
+  const seen = new Set();
+  const merged = [];
+  for (const group of groups) {
+    for (const item of group || []) {
+      if (!item?.symbol || !item?.name) continue;
+      const symbol = item.symbol.toUpperCase();
+      if (seen.has(symbol)) continue;
+      seen.add(symbol);
+      merged.push({ symbol, name: item.name, aliases: item.aliases || [] });
+    }
+  }
+  return merged.slice(0, 12);
+}
+
+function koreanMarketSuffix(marketText = "") {
+  return /KOSDAQ|코스닥|KQ/i.test(marketText) ? ".KQ" : ".KS";
+}
+
+function collectKoreanSearchItems(node, out = []) {
+  if (!node) return out;
+  if (Array.isArray(node)) {
+    const code = node.find((value) => /^\d{6}$/.test(String(value || "")));
+    const name = node.find((value) => /[가-힣]/.test(String(value || "")) && !/코스피|코스닥|KOSPI|KOSDAQ/i.test(String(value)));
+    if (code && name) {
+      out.push({
+        symbol: `${code}${koreanMarketSuffix(node.join(" "))}`,
+        name: String(name)
+      });
+    }
+    node.forEach((child) => collectKoreanSearchItems(child, out));
+    return out;
+  }
+  if (typeof node === "object") {
+    const code = node.code || node.itemCode || node.symbol || node.ticker;
+    const name = node.name || node.itemName || node.korName || node.title;
+    if (/^\d{6}$/.test(String(code || "")) && name) {
+      out.push({
+        symbol: `${code}${koreanMarketSuffix(node.market || node.exchange || node.type || "")}`,
+        name: String(name)
+      });
+    }
+    Object.values(node).forEach((child) => collectKoreanSearchItems(child, out));
+  }
+  return out;
+}
+
+async function searchKoreanSymbols(query) {
+  if (!/[가-힣]|\d{6}/.test(query)) return [];
+  const url = `https://ac.finance.naver.com/ac?q=${encodeURIComponent(query)}&q_enc=UTF-8&st=111&r_lt=111`;
+  try {
+    const response = await fetchWithTimeout(url, 1800);
+    if (!response.ok) return [];
+    const text = await response.text();
+    const jsonText = text.trim().replace(/^[^{[]*\(/, "").replace(/\);?$/, "");
+    const json = JSON.parse(jsonText);
+    return collectKoreanSearchItems(json);
+  } catch {
+    return [];
+  }
+}
+
+async function searchUsSymbols(query) {
+  if (!/[a-zA-Z]/.test(query)) return [];
+  const usExchanges = new Set(["NYQ", "NYS", "NMS", "NGM", "NCM", "NAS", "ASE", "PCX", "BTS"]);
+  const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=12&newsCount=0`;
+  try {
+    const response = await fetchWithTimeout(url, 1800, {
+      headers: { "Accept": "application/json" }
+    });
+    if (!response.ok) return [];
+    const json = await response.json();
+    return (json.quotes || [])
+      .filter((quote) => ["EQUITY", "ETF"].includes(quote.quoteType) && quote.symbol && quote.shortname)
+      .filter((quote) => usExchanges.has(quote.exchange) && !String(quote.symbol).includes("."))
+      .map((quote) => ({
+        symbol: `${String(quote.symbol).toUpperCase()}.US`,
+        name: String(quote.shortname || quote.longname || quote.symbol)
+      }));
+  } catch {
+    return [];
+  }
+}
+
+async function searchSymbols(query) {
+  const staticMatches = staticSearch(query);
+  const [koreanMatches, usMatches] = await Promise.all([
+    searchKoreanSymbols(query),
+    searchUsSymbols(query)
+  ]);
+  return mergeSearchResults(staticMatches, koreanMatches, usMatches);
+}
+
 function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {
   const base = FALLBACK_BASE[symbol] || FALLBACK_BASE["NVDA.US"];
   const rows = [];
@@ -868,9 +1054,15 @@ async function sendJson(res, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function appPathname(url) {
+  const stripped = url.pathname.replace(/^\/stock8-7(?=\/|$)/, "");
+  return stripped || "/";
+}
+
 async function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const rawPath = url.pathname === "/" ? "/index.html" : url.pathname;
+  const pathname = appPathname(url);
+  const rawPath = pathname === "/" ? "/index.html" : pathname;
   const safePath = normalize(decodeURIComponent(rawPath)).replace(/^(\.\.[/\\])+/, "");
   const filePath = join(PUBLIC_DIR, safePath);
 
@@ -886,18 +1078,19 @@ async function serveStatic(req, res) {
 
 createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+  const pathname = appPathname(url);
 
-  if (url.pathname === "/health") {
+  if (pathname === "/health") {
     await sendJson(res, { status: "ok" });
     return;
   }
 
-  if (url.pathname === "/api/quote") {
+  if (pathname === "/api/quote") {
     await sendJson(res, await getQuote(url.searchParams.get("symbol") || "NVDA.US", url.searchParams.get("mode") || "KRX"));
     return;
   }
 
-  if (url.pathname === "/api/candles") {
+  if (pathname === "/api/candles") {
     const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
     const limit = Math.min(260, Math.max(40, Number(url.searchParams.get("limit") || 140)));
     await sendJson(res, {
@@ -910,7 +1103,7 @@ createServer(async (req, res) => {
     return;
   }
 
-  if (url.pathname === "/api/intraday") {
+  if (pathname === "/api/intraday") {
     const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
     const interval = url.searchParams.get("interval") || "1m";
     const payload = await getIntraday(symbol, interval, url.searchParams.get("mode") || "KRX");
@@ -924,7 +1117,7 @@ createServer(async (req, res) => {
     return;
   }
 
-  if (url.pathname === "/api/chart") {
+  if (pathname === "/api/chart") {
     const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
     const interval = url.searchParams.get("interval") || "1d";
     const limit = Math.min(900, Math.max(20, Number(url.searchParams.get("limit") || 120)));
@@ -941,15 +1134,9 @@ createServer(async (req, res) => {
     return;
   }
 
-  if (url.pathname === "/api/search") {
-    const q = (url.searchParams.get("q") || "").trim().toLowerCase();
-    const compact = q.replace(/\s+/g, "");
-    const matches = SYMBOL_SEARCH.filter((item) => {
-      const haystack = [item.symbol, item.name, ...(item.aliases || [])]
-        .join(" ")
-        .toLowerCase();
-      return !compact || haystack.replace(/\s+/g, "").includes(compact) || haystack.includes(q);
-    }).slice(0, 8);
+  if (pathname === "/api/search") {
+    const q = (url.searchParams.get("q") || "").trim();
+    const matches = await searchSymbols(q);
     await sendJson(res, { ok: true, results: matches });
     return;
   }

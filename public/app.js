@@ -134,6 +134,11 @@ function isIntraday(interval) {
   return !["1d", "1wk", "1mo"].includes(interval);
 }
 
+function minimumLimitForInterval(interval) {
+  if (interval === "1m") return 390;
+  return 20;
+}
+
 function tickFormatter(interval, time) {
   const date = new Date(time * 1000);
   if (!isIntraday(interval)) {
@@ -533,6 +538,22 @@ function closeSuggestions(card) {
   card.querySelector(".suggestions").classList.remove("open");
 }
 
+async function selectSearchItem(card, item) {
+  const state = chartState.get(card.dataset.cardId);
+  const input = card.querySelector(".symbol-input");
+  state.item = {
+    symbol: item.symbol,
+    name: item.name,
+    decimals: item.symbol.endsWith(".KS") || item.symbol.endsWith(".KQ") ? 0 : 2
+  };
+  state.isEditingSymbol = false;
+  input.value = item.name;
+  input.blur();
+  closeSuggestions(card);
+  saveCharts();
+  await refreshCard(state, true);
+}
+
 document.addEventListener("pointerdown", (event) => {
   document.querySelectorAll(".chart-card").forEach((card) => {
     if (!card.querySelector(".symbol-search")?.contains(event.target)) closeSuggestions(card);
@@ -551,19 +572,7 @@ async function showSuggestions(card, query) {
       button.innerHTML = `<b>${item.name}</b><span>${item.symbol}</span>`;
       button.addEventListener("mousedown", async (event) => {
         event.preventDefault();
-        const state = chartState.get(card.dataset.cardId);
-        const input = card.querySelector(".symbol-input");
-        state.item = {
-          symbol: item.symbol,
-          name: item.name,
-          decimals: item.symbol.endsWith(".KS") || item.symbol.endsWith(".KQ") ? 0 : 2
-        };
-        state.isEditingSymbol = false;
-        input.value = item.name;
-        input.blur();
-        closeSuggestions(card);
-        saveCharts();
-        await refreshCard(state, true);
+        await selectSearchItem(card, item);
       });
       return button;
     })
@@ -586,8 +595,15 @@ function bindSearch(card) {
   });
   input.addEventListener("keydown", async (event) => {
     if (event.key !== "Enter") return;
+    event.preventDefault();
     const first = card.querySelector(".suggestion");
-    if (first) first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    if (first) {
+      first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      return;
+    }
+    const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(input.value)}`);
+    const json = await response.json();
+    if (json.results?.[0]) await selectSearchItem(card, json.results[0]);
   });
   input.addEventListener("blur", () => {
     setTimeout(() => {
@@ -618,6 +634,8 @@ function renderTimeframeButtons(card, state) {
       button.textContent = timeframe.label;
       button.addEventListener("click", async () => {
         state.interval = timeframe.value;
+        state.limit = Math.max(state.limit, minimumLimitForInterval(state.interval));
+        card.querySelector(".period-input").value = String(state.limit);
         renderTimeframeButtons(card, state);
         await refreshCard(state, true);
       });
@@ -630,7 +648,7 @@ function bindPeriod(card, state) {
   const input = card.querySelector(".period-input");
   input.value = String(state.limit);
   const apply = async () => {
-    const next = Math.min(500, Math.max(20, Number(input.value || DEFAULT_LIMIT)));
+    const next = Math.min(500, Math.max(minimumLimitForInterval(state.interval), Number(input.value || DEFAULT_LIMIT)));
     input.value = String(next);
     state.limit = next;
     await refreshCard(state, true);
