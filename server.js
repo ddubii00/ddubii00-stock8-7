@@ -576,6 +576,10 @@ function replaceKoreanTime(timestamp, hour, minute) {
   return Math.floor(date.getTime() / 1000);
 }
 
+function minuteBucket(timestamp) {
+  return Math.floor(timestamp / 60) * 60;
+}
+
 function normalizeKoreanIntradayRows(symbol, rows) {
   if (!isKoreanSymbol(symbol)) return rows;
   const byTime = new Map();
@@ -586,7 +590,7 @@ function normalizeKoreanIntradayRows(symbol, rows) {
 
   for (const row of rows) {
     const minute = koreanMinuteOfDay(row.time);
-    const time = minute === finalPrintMinute ? replaceKoreanTime(row.time, 15, 30) : row.time;
+    const time = minute === finalPrintMinute ? replaceKoreanTime(row.time, 15, 30) : minuteBucket(row.time);
     if (minute >= closingAuctionStart && minute <= closingAuctionEnd) continue;
     if (minute > closeMinute && minute !== finalPrintMinute) continue;
     const existing = byTime.get(time);
@@ -781,13 +785,27 @@ function applyLatestDailyPrice(rows, payload) {
   return next;
 }
 
-function applyLiveQuoteToRows(rows, quote, intervalSeconds = 60) {
+function shouldSkipSyntheticKoreanMinute(symbol, timestamp) {
+  if (!isKoreanSymbol(symbol)) return false;
+  const minute = koreanMinuteOfDay(timestamp);
+  return minute >= 15 * 60 + 20 && minute < 15 * 60 + 30;
+}
+
+function normalizeLiveQuoteBucket(symbol, timestamp) {
+  if (!isKoreanSymbol(symbol)) return timestamp;
+  const minute = koreanMinuteOfDay(timestamp);
+  if (minute >= 15 * 60 + 30) return replaceKoreanTime(timestamp, 15, 30);
+  return timestamp;
+}
+
+function applyLiveQuoteToRows(rows, quote, intervalSeconds = 60, symbol = "") {
   if (!rows.length || !quote || !Number.isFinite(quote.price)) return rows;
   const next = [...rows];
   const last = next.at(-1);
   const quoteTime = Number(quote.marketTime || quote.asOf || Math.floor(Date.now() / 1000));
-  const bucketTime = Math.floor(quoteTime / intervalSeconds) * intervalSeconds;
-  const targetTime = bucketTime >= last.time ? bucketTime : last.time;
+  const bucketTime = normalizeLiveQuoteBucket(symbol, Math.floor(quoteTime / intervalSeconds) * intervalSeconds);
+  const stepCount = Math.max(0, Math.floor((bucketTime - last.time) / intervalSeconds));
+  const targetTime = stepCount > 0 ? last.time + stepCount * intervalSeconds : last.time;
   if (targetTime === last.time) {
     next[next.length - 1] = {
       ...last,
@@ -797,11 +815,24 @@ function applyLiveQuoteToRows(rows, quote, intervalSeconds = 60) {
     };
     return next;
   }
+  for (let time = last.time + intervalSeconds; time < targetTime; time += intervalSeconds) {
+    if (shouldSkipSyntheticKoreanMinute(symbol, time)) continue;
+    const previous = next.at(-1);
+    next.push({
+      time,
+      open: previous.close,
+      high: previous.close,
+      low: previous.close,
+      close: previous.close,
+      volume: 0,
+      synthetic: true
+    });
+  }
   next.push({
     time: targetTime,
-    open: last.close,
-    high: Math.max(last.close, quote.price),
-    low: Math.min(last.close, quote.price),
+    open: next.at(-1).close,
+    high: Math.max(next.at(-1).close, quote.price),
+    low: Math.min(next.at(-1).close, quote.price),
     close: quote.price,
     volume: 0
   });
@@ -1149,7 +1180,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
     series = config.aggregate ? aggregateRows(series, config.aggregate) : series;
     if (interval === "1d") series = applyLatestDailyPrice(series, payload);
-    if (isIntradayInterval(interval) && liveQuote) series = applyLiveQuoteToRows(series, liveQuote, config.seconds);
+    if (isIntradayInterval(interval) && liveQuote) series = applyLiveQuoteToRows(series, liveQuote, config.seconds, normalized);
     const trimmed = series.slice(-limit);
     const lastClose = trimmed.at(-1)?.close;
     const prevClose = trimmed.at(-2)?.close;
