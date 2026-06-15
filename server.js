@@ -449,11 +449,81 @@ function parseKisOverseasQuote(symbol, json) {
   };
 }
 
-function validateKisQuote(quote) {
+function validateQuote(quote) {
   if (!Number.isFinite(Number(quote.price)) || Number(quote.price) <= 0) {
-    throw new Error(`KIS quote invalid price for ${quote.symbol}`);
+    throw new Error(`Quote invalid price for ${quote.symbol}`);
   }
   return quote;
+}
+
+function naverIndexCode(symbol) {
+  if (symbol === "^KS11") return "KOSPI";
+  if (symbol === "^KQ11") return "KOSDAQ";
+  return "";
+}
+
+function naverTimestamp(value) {
+  const time = Date.parse(value || "");
+  return Number.isFinite(time) ? Math.floor(time / 1000) : Math.floor(Date.now() / 1000);
+}
+
+function naverSignedChange(value, direction) {
+  const number = numericField(value);
+  if (!Number.isFinite(number)) return NaN;
+  const marker = `${direction?.code || ""} ${direction?.text || ""} ${direction?.name || ""}`;
+  if (/하락|FALLING|5|4/i.test(marker)) return -Math.abs(number);
+  if (/보합|UNCHANGED|3/i.test(marker)) return 0;
+  return Math.abs(number);
+}
+
+function parseNaverRealtimeQuote(symbol, item, mode = "KRX") {
+  const normalized = symbol.trim().toUpperCase();
+  const useNxt = mode === "NTX" && isKoreanSymbol(normalized) && item.overMarketPriceInfo;
+  const direction = useNxt ? item.overMarketPriceInfo.compareToPreviousPrice : item.compareToPreviousPrice;
+  const price = useNxt
+    ? numericField(item.overMarketPriceInfo.overPrice, item.closePriceRaw, item.closePrice)
+    : numericField(item.closePriceRaw, item.closePrice);
+  const change = useNxt
+    ? naverSignedChange(item.overMarketPriceInfo.compareToPreviousClosePrice, direction)
+    : naverSignedChange(item.compareToPreviousClosePriceRaw ?? item.compareToPreviousClosePrice, direction);
+  const changePercent = useNxt
+    ? naverSignedChange(item.overMarketPriceInfo.fluctuationsRatio ?? item.fluctuationsRatioRaw ?? item.fluctuationsRatio, direction)
+    : naverSignedChange(item.fluctuationsRatioRaw ?? item.fluctuationsRatio, direction);
+  const asOf = naverTimestamp(useNxt ? item.overMarketPriceInfo.localTradedAt : item.localTradedAt);
+  const previousClose = Number.isFinite(price) && Number.isFinite(change) ? price - change : NaN;
+  const statusOpen = useNxt
+    ? item.overMarketPriceInfo.overMarketStatus === "OPEN"
+    : item.marketStatus === "OPEN";
+  return validateQuote({
+    symbol: normalized,
+    name: SYMBOL_NAMES[normalized] || item.stockName || normalized,
+    price,
+    previousClose,
+    change,
+    changePercent,
+    changeRate: changePercent,
+    asOf,
+    marketTime: asOf,
+    marketStatus: isKoreanIndex(normalized)
+      ? (statusOpen ? "장중" : "장종료")
+      : (statusOpen ? "장중" : "종가"),
+    source: useNxt ? "naver-nxt-realtime" : "naver-realtime"
+  });
+}
+
+async function fetchNaverRealtimeQuote(symbol, mode = "KRX") {
+  const normalized = symbol.trim().toUpperCase();
+  if (!isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) {
+    throw new Error(`Naver realtime quote not supported for ${normalized}`);
+  }
+  const code = isKoreanIndex(normalized) ? naverIndexCode(normalized) : normalized.split(".")[0];
+  const type = isKoreanIndex(normalized) ? "index" : "stock";
+  const response = await fetchWithTimeout(`https://polling.finance.naver.com/api/realtime/domestic/${type}/${encodeURIComponent(code)}`, 2200);
+  if (!response.ok) throw new Error(`Naver realtime HTTP ${response.status}`);
+  const json = await response.json();
+  const item = json?.datas?.[0];
+  if (!item) throw new Error(`Naver realtime missing data for ${normalized}`);
+  return parseNaverRealtimeQuote(normalized, item, mode);
 }
 
 async function fetchKisQuote(symbol) {
@@ -463,7 +533,7 @@ async function fetchKisQuote(symbol) {
       FID_COND_MRKT_DIV_CODE: "U",
       FID_INPUT_ISCD: kisIndexCode(normalized)
     });
-    return validateKisQuote(parseKisIndexQuote(normalized, json));
+    return validateQuote(parseKisIndexQuote(normalized, json));
   }
   if (isKoreanSymbol(normalized)) {
     const code = normalized.split(".")[0];
@@ -471,7 +541,7 @@ async function fetchKisQuote(symbol) {
       FID_COND_MRKT_DIV_CODE: "J",
       FID_INPUT_ISCD: code
     });
-    return validateKisQuote(parseKisDomesticQuote(normalized, json));
+    return validateQuote(parseKisDomesticQuote(normalized, json));
   }
   if (normalized.endsWith(".US")) {
     const code = normalized.replace(".US", "");
@@ -484,7 +554,7 @@ async function fetchKisQuote(symbol) {
           EXCD: exchangeCode,
           SYMB: code
         });
-        return validateKisQuote(parseKisOverseasQuote(normalized, json));
+        return validateQuote(parseKisOverseasQuote(normalized, json));
       } catch (error) {
         lastError = error;
       }
@@ -1007,13 +1077,21 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
   try {
     const useNtxQuote = mode === "NTX" && isUsSymbol(normalized);
     let liveQuote = null;
-    if (KIS_ENABLED && kisMeta.supported) {
+    const preferNaverNxt = mode === "NTX" && isKoreanSymbol(normalized);
+    if (KIS_ENABLED && kisMeta.supported && !preferNaverNxt) {
       kisMeta.attempted = true;
       try {
         liveQuote = await fetchKisQuote(normalized);
         kisMeta.ok = true;
       } catch (error) {
         kisMeta.error = kisErrorMessage(error);
+        liveQuote = null;
+      }
+    }
+    if (!liveQuote && (isKoreanSymbol(normalized) || isKoreanIndex(normalized))) {
+      try {
+        liveQuote = await fetchNaverRealtimeQuote(normalized, mode);
+      } catch {
         liveQuote = null;
       }
     }
@@ -1142,7 +1220,8 @@ async function getQuote(symbol, mode = "KRX") {
     attempted: false,
     ok: false
   };
-  if (KIS_ENABLED && kisMeta.supported) {
+  const preferNaverNxt = mode === "NTX" && isKoreanSymbol(normalized);
+  if (KIS_ENABLED && kisMeta.supported && !preferNaverNxt) {
     kisMeta.attempted = true;
     try {
       return {
@@ -1151,6 +1230,16 @@ async function getQuote(symbol, mode = "KRX") {
       };
     } catch (error) {
       kisMeta.error = kisErrorMessage(error);
+    }
+  }
+  if (isKoreanSymbol(normalized) || isKoreanIndex(normalized)) {
+    try {
+      return {
+        ...(await fetchNaverRealtimeQuote(normalized, mode)),
+        kis: kisMeta
+      };
+    } catch {
+      // Continue to Yahoo/fallback if Naver realtime is unavailable.
     }
   }
   const intraday = await getIntraday(normalized, "1m", mode);

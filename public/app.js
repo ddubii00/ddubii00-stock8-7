@@ -311,11 +311,11 @@ function previousRegularCloseForRow(state, row) {
 }
 
 function tooltipValues(state, row) {
-  const open = regularOpenForRow(state, row);
+  const open = isIntraday(state.interval) ? row.open : regularOpenForRow(state, row);
   const close = row.close;
-  const previousClose = previousRegularCloseForRow(state, row);
-  const changePct = Number.isFinite(previousClose) && previousClose !== 0
-    ? ((close - previousClose) / previousClose) * 100
+  const base = isIntraday(state.interval) ? open : previousRegularCloseForRow(state, row);
+  const changePct = Number.isFinite(base) && base !== 0
+    ? ((close - base) / base) * 100
     : NaN;
   return { open, close, changePct };
 }
