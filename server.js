@@ -234,7 +234,6 @@ function isForexSymbol(symbol) {
 
 function kisSupportsQuote(symbol, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
-  if (mode === "NTX" && isUsSymbol(normalized)) return false;
   return isKoreanSymbol(normalized) || isKoreanIndex(normalized) || isUsSymbol(normalized);
 }
 
@@ -456,12 +455,21 @@ async function fetchKisQuote(symbol) {
   }
   if (normalized.endsWith(".US")) {
     const code = normalized.replace(".US", "");
-    const json = await kisFetch("/uapi/overseas-price/v1/quotations/price", "HHDFS00000300", {
-      AUTH: "",
-      EXCD: US_EXCHANGE_CODES[code] || "NAS",
-      SYMB: code
-    });
-    return parseKisOverseasQuote(normalized, json);
+    const exchangeCandidates = [...new Set([US_EXCHANGE_CODES[code], "NAS", "NYS", "AMS"].filter(Boolean))];
+    let lastError = null;
+    for (const exchangeCode of exchangeCandidates) {
+      try {
+        const json = await kisFetch("/uapi/overseas-price/v1/quotations/price", "HHDFS00000300", {
+          AUTH: "",
+          EXCD: exchangeCode,
+          SYMB: code
+        });
+        return parseKisOverseasQuote(normalized, json);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error(`KIS quote not supported for ${normalized}`);
   }
   throw new Error(`KIS quote not supported for ${normalized}`);
 }
@@ -931,7 +939,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
   try {
     const useNtxQuote = mode === "NTX" && isUsSymbol(normalized);
     let liveQuote = null;
-    if (KIS_ENABLED && kisMeta.supported && !useNtxQuote) {
+    if (KIS_ENABLED && kisMeta.supported) {
       kisMeta.attempted = true;
       try {
         liveQuote = await fetchKisQuote(normalized);
