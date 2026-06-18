@@ -476,9 +476,8 @@ function kisIntradayEndTime(now = new Date()) {
   return `${parts.hour}${parts.minute}${parts.second}`;
 }
 
-function parseKisIntradayRows(symbol, json) {
+function parseKisIntradayRows(symbol, outputs) {
   const rows = [];
-  const outputs = Array.isArray(json.output2) ? json.output2 : Array.isArray(json.output) ? json.output : [];
   for (const item of outputs) {
     const time = koreanDateTimeToUnix(item.stck_bsop_date, item.stck_cntg_hour);
     const open = numericField(item.stck_oprc, item.open);
@@ -499,18 +498,50 @@ function parseKisIntradayRows(symbol, json) {
   return normalizeKoreanIntradayRows(symbol, rows).sort((a, b) => a.time - b.time);
 }
 
-async function fetchKisIntradayRows(symbol) {
+async function fetchKisIntradayRows(symbol, yahooLastTime = 0) {
   const normalized = symbol.trim().toUpperCase();
   if (!KIS_ENABLED || !isKoreanSymbol(normalized)) return [];
   const code = normalized.split(".")[0];
-  const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice", "FHKST03010200", {
-    FID_ETC_CLS_CODE: "",
-    FID_COND_MRKT_DIV_CODE: "J",
-    FID_INPUT_ISCD: code,
-    FID_INPUT_HOUR_1: kisIntradayEndTime(),
-    FID_PW_DATA_INCU_YN: "Y"
-  });
-  return parseKisIntradayRows(normalized, json);
+
+  const allRawRows = [];
+  let currentEndTime = kisIntradayEndTime();
+  const maxPages = 5;
+
+  for (let page = 0; page < maxPages; page++) {
+    const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice", "FHKST03010200", {
+      FID_ETC_CLS_CODE: "",
+      FID_COND_MRKT_DIV_CODE: "J",
+      FID_INPUT_ISCD: code,
+      FID_INPUT_HOUR_1: currentEndTime,
+      FID_PW_DATA_INCU_YN: "Y"
+    });
+
+    const outputs = Array.isArray(json.output2) ? json.output2 : Array.isArray(json.output) ? json.output : [];
+    if (!outputs.length) break;
+
+    allRawRows.push(...outputs);
+
+    const lastItem = outputs.at(-1);
+    if (!lastItem || !lastItem.stck_cntg_hour) break;
+
+    const oldestUnixTime = koreanDateTimeToUnix(lastItem.stck_bsop_date, lastItem.stck_cntg_hour);
+    if (Number.isFinite(oldestUnixTime) && yahooLastTime > 0 && oldestUnixTime <= yahooLastTime) {
+      break;
+    }
+
+    const hh = Number(lastItem.stck_cntg_hour.slice(0, 2));
+    const mm = Number(lastItem.stck_cntg_hour.slice(2, 4));
+    let nextMm = mm - 1;
+    let nextHh = hh;
+    if (nextMm < 0) {
+      nextMm = 59;
+      nextHh -= 1;
+    }
+    if (nextHh < 9) break;
+    currentEndTime = `${String(nextHh).padStart(2, "0")}${String(nextMm).padStart(2, "0")}00`;
+  }
+
+  return parseKisIntradayRows(normalized, allRawRows);
 }
 
 function validateQuote(quote) {
@@ -1181,20 +1212,28 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     let liveQuote = null;
     let kisIntradayRows = [];
     const preferNaverNxt = mode === "NTX" && isKoreanSymbol(normalized);
-    if (KIS_ENABLED && kisMeta.supported && !preferNaverNxt) {
-      kisMeta.attempted = true;
-      try {
-        liveQuote = await fetchKisQuote(normalized);
-        kisMeta.ok = true;
-      } catch (error) {
-        kisMeta.error = kisErrorMessage(error);
-        liveQuote = null;
+    const includePrePost = useNtxQuote && isIntradayInterval(interval);
+    const range = includePrePost ? "1d" : config.range;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=${includePrePost ? "true" : "false"}`;
+
+    let yahooPayload = null;
+    let yahooLastTime = 0;
+    let yahooError = null;
+    try {
+      const response = await fetchWithTimeout(url, 4500);
+      if (!response.ok) throw new Error(`Yahoo HTTP ${response.status}`);
+      yahooPayload = parseYahooChart(normalized, await response.json());
+      if (yahooPayload.series?.length) {
+        yahooLastTime = yahooPayload.series.at(-1).time;
       }
+    } catch (err) {
+      yahooError = err;
     }
+
     if (KIS_ENABLED && isKoreanSymbol(normalized) && isIntradayInterval(interval) && !preferNaverNxt) {
       kisMeta.intradayAttempted = true;
       try {
-        kisIntradayRows = await fetchKisIntradayRows(normalized);
+        kisIntradayRows = await fetchKisIntradayRows(normalized, yahooLastTime);
         kisMeta.intradayOk = true;
         kisMeta.intradayCount = kisIntradayRows.length;
       } catch (error) {
@@ -1202,6 +1241,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
         kisMeta.intradayError = kisErrorMessage(error);
       }
     }
+
     if (!liveQuote && (isKoreanSymbol(normalized) || isKoreanIndex(normalized))) {
       try {
         liveQuote = await fetchNaverRealtimeQuote(normalized, mode);
@@ -1209,12 +1249,25 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
         liveQuote = null;
       }
     }
-    const includePrePost = useNtxQuote && isIntradayInterval(interval);
-    const range = includePrePost ? "1d" : config.range;
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=${includePrePost ? "true" : "false"}`;
-    const response = await fetchWithTimeout(url, 4500);
-    if (!response.ok) throw new Error(`Yahoo HTTP ${response.status}`);
-    const payload = parseYahooChart(normalized, await response.json());
+
+    let payload = null;
+    if (yahooPayload) {
+      payload = yahooPayload;
+    } else if (kisIntradayRows.length) {
+      payload = {
+        symbol: normalized,
+        price: liveQuote?.price || kisIntradayRows.at(-1).close,
+        previousClose: liveQuote?.previousClose || kisIntradayRows[0].open,
+        change: liveQuote?.change || 0,
+        changePercent: liveQuote?.changePercent || 0,
+        asOf: kisIntradayRows.at(-1).time,
+        marketTime: kisIntradayRows.at(-1).time,
+        series: kisIntradayRows
+      };
+    } else {
+      throw yahooError || new Error("No chart data");
+    }
+
     if (useNtxQuote && !isIntradayInterval(interval)) {
       try {
         const ntxPayload = await getIntraday(normalized, "1m", "NTX");
@@ -1260,7 +1313,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     let series = isIntradayInterval(interval)
       ? normalizeKoreanIntradayRows(normalized, payload.series)
       : payload.series;
-    if (isIntradayInterval(interval) && kisIntradayRows.length) {
+    if (isIntradayInterval(interval) && kisIntradayRows.length && payload.series !== kisIntradayRows) {
       series = mergeRowsByTime(series, kisIntradayRows);
       payload.source = liveQuote?.source === "kis" ? "kis" : "kis-intraday";
     }
