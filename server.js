@@ -449,6 +449,70 @@ function parseKisOverseasQuote(symbol, json) {
   };
 }
 
+function koreanDateTimeToUnix(dateValue, timeValue) {
+  const date = String(dateValue || "").replace(/\D/g, "");
+  const time = String(timeValue || "").replace(/\D/g, "").padStart(6, "0");
+  if (date.length !== 8 || time.length < 4) return NaN;
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(4, 6));
+  const day = Number(date.slice(6, 8));
+  const hour = Number(time.slice(0, 2));
+  const minute = Number(time.slice(2, 4));
+  const second = Number(time.slice(4, 6) || 0);
+  return Math.floor(Date.UTC(year, month - 1, day, hour - 9, minute, second) / 1000);
+}
+
+function kisIntradayEndTime(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+  const minute = Number(parts.hour) * 60 + Number(parts.minute);
+  if (minute >= 15 * 60 + 31) return "153100";
+  if (minute < 9 * 60) return "090000";
+  return `${parts.hour}${parts.minute}${parts.second}`;
+}
+
+function parseKisIntradayRows(symbol, json) {
+  const rows = [];
+  const outputs = Array.isArray(json.output2) ? json.output2 : Array.isArray(json.output) ? json.output : [];
+  for (const item of outputs) {
+    const time = koreanDateTimeToUnix(item.stck_bsop_date, item.stck_cntg_hour);
+    const open = numericField(item.stck_oprc, item.open);
+    const high = numericField(item.stck_hgpr, item.high);
+    const low = numericField(item.stck_lwpr, item.low);
+    const close = numericField(item.stck_prpr, item.close);
+    if (![time, open, high, low, close].every((value) => Number.isFinite(value)) || close <= 0) continue;
+    rows.push({
+      time,
+      open,
+      high,
+      low,
+      close,
+      volume: numericField(item.cntg_vol, item.acml_vol) || 0,
+      source: "kis"
+    });
+  }
+  return normalizeKoreanIntradayRows(symbol, rows).sort((a, b) => a.time - b.time);
+}
+
+async function fetchKisIntradayRows(symbol) {
+  const normalized = symbol.trim().toUpperCase();
+  if (!KIS_ENABLED || !isKoreanSymbol(normalized)) return [];
+  const code = normalized.split(".")[0];
+  const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice", "FHKST03010200", {
+    FID_ETC_CLS_CODE: "",
+    FID_COND_MRKT_DIV_CODE: "J",
+    FID_INPUT_ISCD: code,
+    FID_INPUT_HOUR_1: kisIntradayEndTime(),
+    FID_PW_DATA_INCU_YN: "Y"
+  });
+  return parseKisIntradayRows(normalized, json);
+}
+
 function validateQuote(quote) {
   if (!Number.isFinite(Number(quote.price)) || Number(quote.price) <= 0) {
     throw new Error(`Quote invalid price for ${quote.symbol}`);
@@ -856,6 +920,13 @@ function aggregateRows(rows, seconds) {
   return [...buckets.values()].sort((a, b) => a.time - b.time);
 }
 
+function mergeRowsByTime(baseRows, overlayRows) {
+  if (!overlayRows?.length) return baseRows;
+  const byTime = new Map(baseRows.map((row) => [row.time, row]));
+  for (const row of overlayRows) byTime.set(row.time, row);
+  return [...byTime.values()].sort((a, b) => a.time - b.time);
+}
+
 async function fetchWithTimeout(url, timeoutMs = 3500, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -1108,6 +1179,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
   try {
     const useNtxQuote = mode === "NTX" && isUsSymbol(normalized);
     let liveQuote = null;
+    let kisIntradayRows = [];
     const preferNaverNxt = mode === "NTX" && isKoreanSymbol(normalized);
     if (KIS_ENABLED && kisMeta.supported && !preferNaverNxt) {
       kisMeta.attempted = true;
@@ -1117,6 +1189,17 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       } catch (error) {
         kisMeta.error = kisErrorMessage(error);
         liveQuote = null;
+      }
+    }
+    if (KIS_ENABLED && isKoreanSymbol(normalized) && isIntradayInterval(interval) && !preferNaverNxt) {
+      kisMeta.intradayAttempted = true;
+      try {
+        kisIntradayRows = await fetchKisIntradayRows(normalized);
+        kisMeta.intradayOk = true;
+        kisMeta.intradayCount = kisIntradayRows.length;
+      } catch (error) {
+        kisMeta.intradayOk = false;
+        kisMeta.intradayError = kisErrorMessage(error);
       }
     }
     if (!liveQuote && (isKoreanSymbol(normalized) || isKoreanIndex(normalized))) {
@@ -1177,6 +1260,10 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     let series = isIntradayInterval(interval)
       ? normalizeKoreanIntradayRows(normalized, payload.series)
       : payload.series;
+    if (isIntradayInterval(interval) && kisIntradayRows.length) {
+      series = mergeRowsByTime(series, kisIntradayRows);
+      payload.source = liveQuote?.source === "kis" ? "kis" : "kis-intraday";
+    }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
     series = config.aggregate ? aggregateRows(series, config.aggregate) : series;
     if (interval === "1d") series = applyLatestDailyPrice(series, payload);

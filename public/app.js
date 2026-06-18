@@ -232,8 +232,10 @@ function createLwChart(container, state) {
     borderVisible: false,
     wickUpColor: "#d92c2c",
     wickDownColor: "#1f5bd8",
-    lastValueVisible: false,
-    priceLineVisible: false,
+    lastValueVisible: true,
+    priceLineVisible: true,
+    priceLineColor: "#ef4444",
+    priceLineWidth: 1,
     priceFormat
   });
 
