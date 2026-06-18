@@ -655,7 +655,7 @@ function normalizeKoreanIntradayRows(symbol, rows) {
   for (const row of rows) {
     const minute = koreanMinuteOfDay(row.time);
     const time = minute === finalPrintMinute ? replaceKoreanTime(row.time, 15, 30) : minuteBucket(row.time);
-    if (minute >= closingAuctionStart && minute <= closingAuctionEnd) continue;
+    if (minute >= closingAuctionStart && minute < closingAuctionEnd) continue;
     if (minute > closeMinute && minute !== finalPrintMinute) continue;
     const existing = byTime.get(time);
     if (!existing) {
@@ -1264,10 +1264,15 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       series = mergeRowsByTime(series, kisIntradayRows);
       payload.source = liveQuote?.source === "kis" ? "kis" : "kis-intraday";
     }
+    if (isIntradayInterval(interval) && liveQuote && isKoreanSymbol(normalized)) {
+      series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
+    }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
     series = config.aggregate ? aggregateRows(series, config.aggregate) : series;
     if (interval === "1d") series = applyLatestDailyPrice(series, payload);
-    if (isIntradayInterval(interval) && liveQuote) series = applyLiveQuoteToRows(series, liveQuote, config.seconds, normalized);
+    if (isIntradayInterval(interval) && liveQuote && !isKoreanSymbol(normalized)) {
+      series = applyLiveQuoteToRows(series, liveQuote, config.seconds, normalized);
+    }
     const trimmed = series.slice(-limit);
     const lastClose = trimmed.at(-1)?.close;
     const prevClose = trimmed.at(-2)?.close;
