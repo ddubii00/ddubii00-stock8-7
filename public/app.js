@@ -74,7 +74,10 @@ function isKoreanSymbol(symbol) {
 }
 
 function priceDecimalsForSymbol(symbol) {
-  return symbol?.endsWith(".US") ? 2 : CHART_PRICE_DECIMALS;
+  if (symbol?.startsWith("^") || symbol === "KRW=X" || symbol?.endsWith(".US")) {
+    return 2;
+  }
+  return CHART_PRICE_DECIMALS;
 }
 
 function priceFormatForSymbol(symbol) {
@@ -617,6 +620,13 @@ function manualSearchItem(query) {
   const raw = String(query || "").trim();
   if (!raw) return null;
   const upper = raw.toUpperCase();
+  if (upper === "KOSPI" || upper === "코스피") return { symbol: "^KS11", name: "KOSPI" };
+  if (upper === "KOSDAQ" || upper === "코스닥") return { symbol: "^KQ11", name: "KOSDAQ" };
+  if (upper === "NASDAQ" || upper === "나스닥") return { symbol: "^IXIC", name: "나스닥" };
+  if (upper === "^KS11") return { symbol: "^KS11", name: "KOSPI" };
+  if (upper === "^KQ11") return { symbol: "^KQ11", name: "KOSDAQ" };
+  if (upper === "^IXIC") return { symbol: "^IXIC", name: "나스닥" };
+  
   if (/^\d{6}$/.test(raw)) return { symbol: `${raw}.KS`, name: raw };
   if (/^\d{6}\.(KS|KQ)$/i.test(raw)) return { symbol: upper, name: raw.slice(0, 6) };
   if (/^[A-Z][A-Z0-9.-]{0,9}(\.US)?$/i.test(raw)) {

@@ -169,7 +169,10 @@ const SYMBOL_SEARCH = [
   { symbol: "F.US", name: "Ford", aliases: ["f", "ford", "포드", "for"] },
   { symbol: "CPNG.US", name: "Coupang", aliases: ["coupang", "쿠팡", "cpng", "cou"] },
   { symbol: "SPCX.US", name: "SPCX ETF", aliases: ["spcx", "spacex", "space x", "space-x"] },
-  { symbol: "SNDK.US", name: "Sandisk", aliases: ["샌디스크", "sandisk", "sndk"] }
+  { symbol: "SNDK.US", name: "Sandisk", aliases: ["샌디스크", "sandisk", "sndk"] },
+  { symbol: "^KS11", name: "KOSPI", aliases: ["코스피", "kospi", "종합주가지수"] },
+  { symbol: "^KQ11", name: "KOSDAQ", aliases: ["코스닥", "kosdaq"] },
+  { symbol: "^IXIC", name: "나스닥", aliases: ["나스닥", "nasdaq", "ndq"] }
 ];
 
 const FALLBACK_BASE = {
@@ -308,7 +311,7 @@ function marketStatus(symbol, now = new Date()) {
     if (isKoreanIndex(symbol)) return open ? "장중" : "장종료";
     return open ? "장중" : "종가";
   }
-  if (symbol.endsWith(".US")) {
+  if (symbol.endsWith(".US") || symbol === "^IXIC" || symbol === "^GSPC") {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
       weekday: "short",
