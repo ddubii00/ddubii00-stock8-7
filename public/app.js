@@ -73,6 +73,10 @@ function isKoreanSymbol(symbol) {
   return symbol?.endsWith(".KS") || symbol?.endsWith(".KQ");
 }
 
+function isKoreanIndex(symbol) {
+  return symbol === "^KS11" || symbol === "^KQ11";
+}
+
 function priceDecimalsForSymbol(symbol) {
   if (symbol?.startsWith("^") || symbol === "KRW=X" || symbol?.endsWith(".US")) {
     return 2;
@@ -263,7 +267,7 @@ function rowByTime(state, time) {
 
 function marketDateKey(symbol, time) {
   const date = typeof time === "number" ? new Date(time * 1000) : new Date(time);
-  const timeZone = isKoreanSymbol(symbol) ? "Asia/Seoul" : "America/New_York";
+  const timeZone = (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) ? "Asia/Seoul" : "America/New_York";
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,
     year: "numeric",
@@ -274,7 +278,7 @@ function marketDateKey(symbol, time) {
 
 function marketMinute(symbol, time) {
   const date = typeof time === "number" ? new Date(time * 1000) : new Date(time);
-  const timeZone = isKoreanSymbol(symbol) ? "Asia/Seoul" : "America/New_York";
+  const timeZone = (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) ? "Asia/Seoul" : "America/New_York";
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     hour: "2-digit",
@@ -286,7 +290,7 @@ function marketMinute(symbol, time) {
 
 function isRegularSessionRow(symbol, row) {
   const minute = marketMinute(symbol, row.time);
-  if (isKoreanSymbol(symbol)) return minute >= 9 * 60 && minute <= 15 * 60 + 30;
+  if (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) return minute >= 9 * 60 && minute <= 15 * 60 + 30;
   return minute >= 9 * 60 + 30 && minute <= 16 * 60;
 }
 

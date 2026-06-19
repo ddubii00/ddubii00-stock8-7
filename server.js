@@ -679,7 +679,7 @@ function minuteBucket(timestamp) {
 }
 
 function normalizeKoreanIntradayRows(symbol, rows) {
-  if (!isKoreanSymbol(symbol)) return rows;
+  if (!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) return rows;
   const byTime = new Map();
   const closingAuctionStart = 15 * 60 + 20;
   const closingAuctionEnd = 15 * 60 + 30;
@@ -712,7 +712,7 @@ function normalizeKoreanIntradayRows(symbol, rows) {
 function applyKoreanClosingPrint(symbol, rows, payload) {
   const marketTime = Number(payload.marketTime || payload.asOf);
   const price = Number(payload.price);
-  if (!isKoreanSymbol(symbol) || !Number.isFinite(marketTime) || !Number.isFinite(price)) return rows;
+  if ((!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) || !Number.isFinite(marketTime) || !Number.isFinite(price)) return rows;
   if (koreanMinuteOfDay(marketTime) < 15 * 60 + 30) return rows;
 
   const closeTime = replaceKoreanTime(marketTime, 15, 30);
@@ -884,13 +884,13 @@ function applyLatestDailyPrice(rows, payload) {
 }
 
 function shouldSkipSyntheticKoreanMinute(symbol, timestamp) {
-  if (!isKoreanSymbol(symbol)) return false;
+  if (!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) return false;
   const minute = koreanMinuteOfDay(timestamp);
   return minute >= 15 * 60 + 20 && minute < 15 * 60 + 30;
 }
 
 function normalizeLiveQuoteBucket(symbol, timestamp) {
-  if (!isKoreanSymbol(symbol)) return timestamp;
+  if (!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) return timestamp;
   const minute = koreanMinuteOfDay(timestamp);
   if (minute >= 15 * 60 + 30) return replaceKoreanTime(timestamp, 15, 30);
   return timestamp;
@@ -1320,13 +1320,13 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       series = mergeRowsByTime(series, kisIntradayRows);
       payload.source = liveQuote?.source === "kis" ? "kis" : "kis-intraday";
     }
-    if (isIntradayInterval(interval) && liveQuote && isKoreanSymbol(normalized)) {
+    if (isIntradayInterval(interval) && liveQuote && (isKoreanSymbol(normalized) || isKoreanIndex(normalized))) {
       series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
     }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
     series = config.aggregate ? aggregateRows(series, config.aggregate) : series;
     if (interval === "1d") series = applyLatestDailyPrice(series, payload);
-    if (isIntradayInterval(interval) && liveQuote && !isKoreanSymbol(normalized)) {
+    if (isIntradayInterval(interval) && liveQuote && !isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) {
       series = applyLiveQuoteToRows(series, liveQuote, config.seconds, normalized);
     }
     const trimmed = series.slice(-limit);
