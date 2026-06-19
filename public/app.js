@@ -434,22 +434,24 @@ function drawMacdBackground(state) {
 
   paintSegment(segmentStartX, width, segmentPositive);
 
-  // Draw red vertical lines for date changes
-  for (let i = 0; i < points.length; i += 1) {
-    const point = points[i];
-    if (point.index === 0) continue;
-    const prevRow = rows[point.index - 1];
-    const currentDate = marketDateKey(state.item.symbol, point.row.time);
-    const prevDate = marketDateKey(state.item.symbol, prevRow.time);
-    if (currentDate !== prevDate) {
-      ctx.strokeStyle = "rgba(239, 68, 68, 0.75)"; // red-500 color with 0.75 opacity
-      ctx.lineWidth = 1 * dpr;
-      ctx.setLineDash([4 * dpr, 3 * dpr]); // Dashed line
-      ctx.beginPath();
-      ctx.moveTo(point.x, 0);
-      ctx.lineTo(point.x, height);
-      ctx.stroke();
-      ctx.setLineDash([]); // Reset line dash
+  // Draw blue vertical lines for date changes in intraday charts
+  if (isIntraday(state.interval)) {
+    for (let i = 0; i < points.length; i += 1) {
+      const point = points[i];
+      if (point.index === 0) continue;
+      const prevRow = rows[point.index - 1];
+      const currentDate = marketDateKey(state.item.symbol, point.row.time);
+      const prevDate = marketDateKey(state.item.symbol, prevRow.time);
+      if (currentDate !== prevDate) {
+        ctx.strokeStyle = "rgba(31, 91, 216, 0.75)"; // blue color with 0.75 opacity
+        ctx.lineWidth = 1 * dpr;
+        ctx.setLineDash([4 * dpr, 3 * dpr]); // Dashed line
+        ctx.beginPath();
+        ctx.moveTo(point.x, 0);
+        ctx.lineTo(point.x, height);
+        ctx.stroke();
+        ctx.setLineDash([]); // Reset line dash
+      }
     }
   }
 }
