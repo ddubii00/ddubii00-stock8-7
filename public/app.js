@@ -518,25 +518,30 @@ function applyPayload(state, payload, initial = false) {
   state.rows = rows;
   state.macd = calcMacd(rows);
   state.previousClose = Number(payload.previousClose);
-  const priceFormat = priceFormatForSymbol(state.item.symbol);
-  state.instance.chart.applyOptions({
-    localization: {
-      timeFormatter: (time) => tickFormatter(state.interval, time),
-      priceFormatter: (price) => formatAxisPrice(price, state.item.symbol)
-    },
-    timeScale: {
-      timeVisible: isIntraday(state.interval),
-      rightOffset: CHART_RIGHT_OFFSET,
-      barSpacing: CHART_BAR_SPACING,
-      tickMarkFormatter: (time) => tickFormatter(state.interval, time)
-    }
-  });
-  state.instance.candleSeries.applyOptions({ priceFormat });
-  for (const period of MA_PERIODS) {
-    state.instance.maSeries[period].applyOptions({ priceFormat });
-  }
 
+  // isTickUpdate: same last candle time = only price updated, not a new bar
   const isTickUpdate = !initial && isIntraday(state.interval) && previousLastTime === latest.time;
+
+  // Only apply chart/series options on full reloads to avoid resetting pan/zoom state
+  if (!isTickUpdate) {
+    const priceFormat = priceFormatForSymbol(state.item.symbol);
+    state.instance.chart.applyOptions({
+      localization: {
+        timeFormatter: (time) => tickFormatter(state.interval, time),
+        priceFormatter: (price) => formatAxisPrice(price, state.item.symbol)
+      },
+      timeScale: {
+        timeVisible: isIntraday(state.interval),
+        rightOffset: CHART_RIGHT_OFFSET,
+        barSpacing: CHART_BAR_SPACING,
+        tickMarkFormatter: (time) => tickFormatter(state.interval, time)
+      }
+    });
+    state.instance.candleSeries.applyOptions({ priceFormat });
+    for (const period of MA_PERIODS) {
+      state.instance.maSeries[period].applyOptions({ priceFormat });
+    }
+  }
 
   if (isTickUpdate && state.visible.candle) {
     state.instance.candleSeries.update(latest);

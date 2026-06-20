@@ -1266,7 +1266,10 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     if (KIS_ENABLED && isKoreanSymbol(normalized) && isIntradayInterval(interval) && !preferNaverNxt) {
       kisMeta.intradayAttempted = true;
       try {
-        kisIntradayRows = await fetchKisIntradayRows(normalized, yahooLastTime);
+        // Pass yahooLastTime=0 to always fetch the full trading day from KIS.
+        // Yahoo Finance often has gaps in the 15:00-15:19 range for Korean stocks,
+        // so we cannot rely on yahooLastTime to determine where KIS should start.
+        kisIntradayRows = await fetchKisIntradayRows(normalized, 0);
         kisMeta.intradayOk = true;
         kisMeta.intradayCount = kisIntradayRows.length;
       } catch (error) {
@@ -1354,7 +1357,8 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
     }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
-    if (isIntradayInterval(interval)) series = fillKoreanIntradayGaps(normalized, series, config.aggregate ? 60 : config.seconds);
+    // Fill 15:00~15:19 gaps (and any other intraday gaps) before aggregating
+    if (isIntradayInterval(interval)) series = fillKoreanIntradayGaps(normalized, series, 60);
     series = config.aggregate ? aggregateRows(series, config.aggregate) : series;
     if (interval === "1d") series = applyLatestDailyPrice(series, payload);
     if (isIntradayInterval(interval) && liveQuote && !isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) {
