@@ -592,7 +592,7 @@ function parseNaverRealtimeQuote(symbol, item, mode = "KRX") {
   const statusOpen = useNxt
     ? item.overMarketPriceInfo.overMarketStatus === "OPEN"
     : item.marketStatus === "OPEN";
-  return validateQuote({
+  const quote = {
     symbol: normalized,
     name: SYMBOL_NAMES[normalized] || item.stockName || normalized,
     price,
@@ -606,7 +606,15 @@ function parseNaverRealtimeQuote(symbol, item, mode = "KRX") {
       ? (statusOpen ? "장중" : "장종료")
       : (statusOpen ? "장중" : "종가"),
     source: useNxt ? "naver-nxt-realtime" : "naver-realtime"
-  });
+  };
+  if (useNxt) {
+    quote.sessionOpen = numericField(item.overMarketPriceInfo.openPrice, price);
+    quote.sessionHigh = numericField(item.overMarketPriceInfo.highPrice, price);
+    quote.sessionLow = numericField(item.overMarketPriceInfo.lowPrice, price);
+    quote.sessionVolume = numericField(item.overMarketPriceInfo.accumulatedTradingVolume) || 0;
+    quote.sessionType = item.overMarketPriceInfo.tradingSessionType || "AFTER_MARKET";
+  }
+  return validateQuote(quote);
 }
 
 async function fetchNaverRealtimeQuote(symbol, mode = "KRX") {
@@ -940,6 +948,64 @@ function applyLatestDailyPrice(rows, payload) {
       close: liveClose
     };
   }
+  return next;
+}
+
+function isNaverNtxQuote(quote) {
+  return quote?.source === "naver-nxt-realtime" && Number.isFinite(Number(quote.price)) && Number.isFinite(Number(quote.marketTime));
+}
+
+function ntxCandleFromQuote(quote) {
+  const close = Number(quote.price);
+  const open = Number.isFinite(Number(quote.sessionOpen)) ? Number(quote.sessionOpen) : close;
+  const high = Number.isFinite(Number(quote.sessionHigh)) ? Number(quote.sessionHigh) : Math.max(open, close);
+  const low = Number.isFinite(Number(quote.sessionLow)) ? Number(quote.sessionLow) : Math.min(open, close);
+  return {
+    time: minuteBucket(Number(quote.marketTime)),
+    open,
+    high: Math.max(high, open, close),
+    low: Math.min(low, open, close),
+    close,
+    volume: Number(quote.sessionVolume || 0),
+    source: "naver-nxt-realtime"
+  };
+}
+
+function applyKoreanNtxIntraday(rows, quote) {
+  if (!rows.length || !isNaverNtxQuote(quote)) return rows;
+  const candle = ntxCandleFromQuote(quote);
+  const minute = koreanMinuteOfDay(candle.time);
+  if (minute <= 15 * 60 + 30 || minute > 20 * 60) return rows;
+  return mergeRowsByTime(rows, [candle]);
+}
+
+function applyKoreanNtxDaily(rows, quote) {
+  if (!rows.length || !isNaverNtxQuote(quote)) return rows;
+  const next = [...rows];
+  const candle = ntxCandleFromQuote(quote);
+  const lastIndex = next.length - 1;
+  const last = next[lastIndex];
+  if (!last) return rows;
+  if (koreanDateKeyForTimestamp(last.time) === koreanDateKeyForTimestamp(candle.time)) {
+    next[lastIndex] = {
+      ...last,
+      high: Math.max(last.high, candle.high),
+      low: Math.min(last.low, candle.low),
+      close: candle.close,
+      volume: Math.max(last.volume || 0, candle.volume || 0),
+      source: "naver-nxt-realtime"
+    };
+    return next;
+  }
+  next.push({
+    time: candle.time,
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+    volume: candle.volume,
+    source: "naver-nxt-realtime"
+  });
   return next;
 }
 
@@ -1378,12 +1444,20 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       series = mergeRowsByTime(series, kisIntradayRows);
       payload.source = liveQuote?.source === "kis" ? "kis" : "kis-intraday";
     }
-    if (isIntradayInterval(interval) && liveQuote && (isKoreanSymbol(normalized) || isKoreanIndex(normalized))) {
+    if (isIntradayInterval(interval) && liveQuote && (isKoreanSymbol(normalized) || isKoreanIndex(normalized)) && !isNaverNtxQuote(liveQuote)) {
       series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
     }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
     series = config.aggregate ? aggregateRows(series, config.aggregate) : series;
+    if (isIntradayInterval(interval) && isKoreanSymbol(normalized) && mode === "NTX" && isNaverNtxQuote(liveQuote)) {
+      series = applyKoreanNtxIntraday(series, liveQuote);
+      payload.source = "naver-nxt-realtime";
+    }
     if (interval === "1d") series = applyLatestDailyPrice(series, payload);
+    if (interval === "1d" && isKoreanSymbol(normalized) && mode === "NTX" && isNaverNtxQuote(liveQuote)) {
+      series = applyKoreanNtxDaily(series, liveQuote);
+      payload.source = "naver-nxt-realtime";
+    }
     if (isIntradayInterval(interval) && liveQuote && !isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) {
       series = applyLiveQuoteToRows(series, liveQuote, config.seconds, normalized);
     }
