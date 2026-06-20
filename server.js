@@ -508,7 +508,7 @@ async function fetchKisIntradayRows(symbol, yahooLastTime = 0) {
 
   const allRawRows = [];
   let currentEndTime = kisIntradayEndTime();
-  const maxPages = 5;
+  const maxPages = 20;
 
   for (let page = 0; page < maxPages; page++) {
     const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice", "FHKST03010200", {
@@ -624,6 +624,66 @@ async function fetchNaverRealtimeQuote(symbol, mode = "KRX") {
   return parseNaverRealtimeQuote(normalized, item, mode);
 }
 
+function koreanDateKeyForTimestamp(timestamp) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date(timestamp * 1000)).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+  return `${parts.year}${parts.month}${parts.day}`;
+}
+
+function parseNaverMinuteRows(symbol, text) {
+  const rawRows = [];
+  for (const match of text.matchAll(/\["(\d{12})",\s*([^,\]]+),\s*([^,\]]+),\s*([^,\]]+),\s*([^,\]]+),\s*([^,\]]+)/g)) {
+    const [, dateTime, openRaw, highRaw, lowRaw, closeRaw, volumeRaw] = match;
+    const close = Number(String(closeRaw).replace(/,/g, ""));
+    if (!Number.isFinite(close) || close <= 0) continue;
+    const time = koreanDateTimeToUnix(dateTime.slice(0, 8), `${dateTime.slice(8)}00`);
+    if (!Number.isFinite(time)) continue;
+    rawRows.push({
+      time,
+      open: Number(String(openRaw).replace(/,/g, "")),
+      high: Number(String(highRaw).replace(/,/g, "")),
+      low: Number(String(lowRaw).replace(/,/g, "")),
+      close,
+      cumulativeVolume: Number(String(volumeRaw).replace(/,/g, "")) || 0
+    });
+  }
+
+  const sorted = rawRows.sort((a, b) => a.time - b.time);
+  return sorted.map((row, index) => {
+    const previous = sorted[index - 1];
+    const open = Number.isFinite(row.open) && row.open > 0 ? row.open : (previous?.close ?? row.close);
+    const high = Number.isFinite(row.high) && row.high > 0 ? row.high : Math.max(open, row.close);
+    const low = Number.isFinite(row.low) && row.low > 0 ? row.low : Math.min(open, row.close);
+    const volume = previous && row.cumulativeVolume >= previous.cumulativeVolume
+      ? row.cumulativeVolume - previous.cumulativeVolume
+      : row.cumulativeVolume;
+    return {
+      time: row.time,
+      open,
+      high,
+      low,
+      close: row.close,
+      volume,
+      source: "naver-minute"
+    };
+  });
+}
+
+async function fetchNaverMinuteRows(symbol, anchorTimestamp) {
+  const normalized = symbol.trim().toUpperCase();
+  if (!isKoreanSymbol(normalized)) return [];
+  const code = normalized.split(".")[0];
+  const dateKey = koreanDateKeyForTimestamp(anchorTimestamp || Math.floor(Date.now() / 1000));
+  const url = `https://api.finance.naver.com/siseJson.naver?symbol=${encodeURIComponent(code)}&requestType=1&startTime=${dateKey}0900&endTime=${dateKey}1530&timeframe=minute`;
+  const response = await fetchWithTimeout(url, 3500);
+  if (!response.ok) throw new Error(`Naver minute HTTP ${response.status}`);
+  return normalizeKoreanIntradayRows(normalized, parseNaverMinuteRows(normalized, await response.text()));
+}
+
 async function fetchKisQuote(symbol) {
   const normalized = symbol.trim().toUpperCase();
   if (isKoreanIndex(normalized)) {
@@ -678,27 +738,6 @@ function minuteBucket(timestamp) {
   return Math.floor(timestamp / 60) * 60;
 }
 
-function visibleSyntheticCandle(symbol, time, price) {
-  const close = Number(price);
-  if (!Number.isFinite(close) || close <= 0) {
-    return { time, open: price, high: price, low: price, close: price, volume: 0, synthetic: true };
-  }
-  const body = isKoreanIndex(symbol)
-    ? Math.max(0.5, close * 0.0008)
-    : Math.max(1, Math.round(close * 0.0012));
-  const wick = body * 0.35;
-  const open = Math.max(0, close - body);
-  return {
-    time,
-    open,
-    high: close + wick,
-    low: Math.max(0, open - wick),
-    close,
-    volume: 0,
-    synthetic: true
-  };
-}
-
 function normalizeKoreanIntradayRows(symbol, rows) {
   if (!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) return rows;
   const byTime = new Map();
@@ -728,29 +767,6 @@ function normalizeKoreanIntradayRows(symbol, rows) {
   }
 
   return [...byTime.values()].sort((a, b) => a.time - b.time);
-}
-
-function fillKoreanIntradayGaps(symbol, rows, intervalSeconds = 60) {
-  if (!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) return rows;
-  if (rows.length < 2) return rows;
-
-  const filled = [rows[0]];
-  for (let i = 1; i < rows.length; i++) {
-    const prev = filled.at(-1);
-    const current = rows[i];
-    const gap = current.time - prev.time;
-
-    if (gap > intervalSeconds && gap <= 45 * 60) {
-      for (let t = prev.time + intervalSeconds; t < current.time; t += intervalSeconds) {
-        const minute = koreanMinuteOfDay(t);
-        if (minute >= 9 * 60 && minute < 15 * 60 + 20) {
-          filled.push(visibleSyntheticCandle(symbol, t, prev.close));
-        }
-      }
-    }
-    filled.push(current);
-  }
-  return filled;
 }
 
 function applyKoreanClosingPrint(symbol, rows, payload) {
@@ -927,12 +943,6 @@ function applyLatestDailyPrice(rows, payload) {
   return next;
 }
 
-function shouldSkipSyntheticKoreanMinute(symbol, timestamp) {
-  if (!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) return false;
-  const minute = koreanMinuteOfDay(timestamp);
-  return minute >= 15 * 60 + 20 && minute < 15 * 60 + 30;
-}
-
 function normalizeLiveQuoteBucket(symbol, timestamp) {
   if (!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) return timestamp;
   const minute = koreanMinuteOfDay(timestamp);
@@ -956,11 +966,6 @@ function applyLiveQuoteToRows(rows, quote, intervalSeconds = 60, symbol = "") {
       close: quote.price
     };
     return next;
-  }
-  for (let time = last.time + intervalSeconds; time < targetTime; time += intervalSeconds) {
-    if (shouldSkipSyntheticKoreanMinute(symbol, time)) continue;
-    const previous = next.at(-1);
-    next.push(visibleSyntheticCandle(symbol, time, previous.close));
   }
   next.push({
     time: targetTime,
@@ -1250,6 +1255,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     const useNtxQuote = mode === "NTX" && isUsSymbol(normalized);
     let liveQuote = null;
     let kisIntradayRows = [];
+    let naverMinuteRows = [];
     const preferNaverNxt = mode === "NTX" && isKoreanSymbol(normalized);
     const includePrePost = useNtxQuote && isIntradayInterval(interval);
     const range = includePrePost ? "1d" : config.range;
@@ -1289,6 +1295,15 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
         liveQuote = await fetchNaverRealtimeQuote(normalized, mode);
       } catch {
         liveQuote = null;
+      }
+    }
+
+    if (isKoreanSymbol(normalized) && isIntradayInterval(interval)) {
+      try {
+        const naverAnchor = liveQuote?.marketTime || liveQuote?.asOf || yahooLastTime || Math.floor(Date.now() / 1000);
+        naverMinuteRows = await fetchNaverMinuteRows(normalized, naverAnchor);
+      } catch {
+        naverMinuteRows = [];
       }
     }
 
@@ -1355,6 +1370,10 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     let series = isIntradayInterval(interval)
       ? normalizeKoreanIntradayRows(normalized, payload.series)
       : payload.series;
+    if (isIntradayInterval(interval) && naverMinuteRows.length) {
+      series = mergeRowsByTime(series, naverMinuteRows);
+      payload.source = payload.source || "naver-minute";
+    }
     if (isIntradayInterval(interval) && kisIntradayRows.length && payload.series !== kisIntradayRows) {
       series = mergeRowsByTime(series, kisIntradayRows);
       payload.source = liveQuote?.source === "kis" ? "kis" : "kis-intraday";
@@ -1363,8 +1382,6 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
     }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
-    // Fill 15:00~15:19 gaps (and any other intraday gaps) before aggregating
-    if (isIntradayInterval(interval)) series = fillKoreanIntradayGaps(normalized, series, 60);
     series = config.aggregate ? aggregateRows(series, config.aggregate) : series;
     if (interval === "1d") series = applyLatestDailyPrice(series, payload);
     if (isIntradayInterval(interval) && liveQuote && !isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) {
