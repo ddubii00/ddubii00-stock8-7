@@ -376,6 +376,17 @@ function keepLatestVisible(state) {
   });
 }
 
+function isViewAtLatest(state) {
+  try {
+    const range = state.instance.chart.timeScale().getVisibleLogicalRange();
+    if (!range || !state.rows?.length) return true;
+    const lastIndex = state.rows.length - 1 + CHART_RIGHT_OFFSET;
+    return range.to >= lastIndex - 3;
+  } catch {
+    return true;
+  }
+}
+
 function drawMacdBackground(state) {
   const { bgCanvas, rows, macd, instance } = state;
   if (!bgCanvas || !rows?.length || !macd?.length) return;
@@ -498,6 +509,7 @@ function applyPayload(state, payload, initial = false) {
   const sourceRows = payload.series || [];
   if (!sourceRows.length) return;
   const previousLastTime = state.rows?.at(-1)?.time;
+  const wasAtLatest = initial || isViewAtLatest(state);
   const rows = sourceRows.slice(-state.limit);
   const latest = rows.at(-1);
   if (!rows.length) return;
@@ -524,19 +536,30 @@ function applyPayload(state, payload, initial = false) {
     state.instance.maSeries[period].applyOptions({ priceFormat });
   }
 
-  if (!initial && isIntraday(state.interval) && previousLastTime === latest.time && state.visible.candle) {
+  const isTickUpdate = !initial && isIntraday(state.interval) && previousLastTime === latest.time;
+
+  if (isTickUpdate && state.visible.candle) {
     state.instance.candleSeries.update(latest);
   } else {
     state.instance.candleSeries.setData(state.visible.candle ? rows : []);
   }
 
-  for (const period of MA_PERIODS) {
-    state.instance.maSeries[period].setData(state.visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
+  if (isTickUpdate) {
+    for (const period of MA_PERIODS) {
+      if (!state.visible[`ma${period}`]) continue;
+      const maData = calcVisibleSma(state, period);
+      const lastMa = maData.at(-1);
+      if (lastMa) state.instance.maSeries[period].update(lastMa);
+    }
+  } else {
+    for (const period of MA_PERIODS) {
+      state.instance.maSeries[period].setData(state.visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
+    }
   }
 
   renderLegend(state, payload);
-  keepLatestVisible(state);
-  setTimeout(() => drawMacdBackground(state), 0);
+  if (wasAtLatest) keepLatestVisible(state);
+  requestAnimationFrame(() => drawMacdBackground(state));
   state.card.classList.add("loaded");
 }
 

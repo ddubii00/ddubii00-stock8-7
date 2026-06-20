@@ -709,6 +709,36 @@ function normalizeKoreanIntradayRows(symbol, rows) {
   return [...byTime.values()].sort((a, b) => a.time - b.time);
 }
 
+function fillKoreanIntradayGaps(symbol, rows, intervalSeconds = 60) {
+  if (!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) return rows;
+  if (rows.length < 2) return rows;
+
+  const filled = [rows[0]];
+  for (let i = 1; i < rows.length; i++) {
+    const prev = filled.at(-1);
+    const current = rows[i];
+    const gap = current.time - prev.time;
+
+    if (gap > intervalSeconds && gap <= 45 * 60) {
+      for (let t = prev.time + intervalSeconds; t < current.time; t += intervalSeconds) {
+        const minute = koreanMinuteOfDay(t);
+        if (minute >= 9 * 60 && minute < 15 * 60 + 20) {
+          filled.push({
+            time: t,
+            open: prev.close,
+            high: prev.close,
+            low: prev.close,
+            close: prev.close,
+            volume: 0
+          });
+        }
+      }
+    }
+    filled.push(current);
+  }
+  return filled;
+}
+
 function applyKoreanClosingPrint(symbol, rows, payload) {
   const marketTime = Number(payload.marketTime || payload.asOf);
   const price = Number(payload.price);
@@ -1324,6 +1354,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
     }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
+    if (isIntradayInterval(interval)) series = fillKoreanIntradayGaps(normalized, series, config.aggregate ? 60 : config.seconds);
     series = config.aggregate ? aggregateRows(series, config.aggregate) : series;
     if (interval === "1d") series = applyLatestDailyPrice(series, payload);
     if (isIntradayInterval(interval) && liveQuote && !isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) {
