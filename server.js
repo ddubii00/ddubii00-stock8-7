@@ -678,19 +678,21 @@ function minuteBucket(timestamp) {
   return Math.floor(timestamp / 60) * 60;
 }
 
-function visibleFlatCandle(symbol, time, price) {
+function visibleSyntheticCandle(symbol, time, price) {
   const close = Number(price);
   if (!Number.isFinite(close) || close <= 0) {
     return { time, open: price, high: price, low: price, close: price, volume: 0, synthetic: true };
   }
-  const tick = isKoreanIndex(symbol)
-    ? 0.01
-    : Math.max(1, Math.round(close * 0.0002));
+  const body = isKoreanIndex(symbol)
+    ? Math.max(0.5, close * 0.0008)
+    : Math.max(1, Math.round(close * 0.0012));
+  const wick = body * 0.35;
+  const open = Math.max(0, close - body);
   return {
     time,
-    open: close,
-    high: close + tick,
-    low: Math.max(0, close - tick),
+    open,
+    high: close + wick,
+    low: Math.max(0, open - wick),
     close,
     volume: 0,
     synthetic: true
@@ -742,7 +744,7 @@ function fillKoreanIntradayGaps(symbol, rows, intervalSeconds = 60) {
       for (let t = prev.time + intervalSeconds; t < current.time; t += intervalSeconds) {
         const minute = koreanMinuteOfDay(t);
         if (minute >= 9 * 60 && minute < 15 * 60 + 20) {
-          filled.push(visibleFlatCandle(symbol, t, prev.close));
+          filled.push(visibleSyntheticCandle(symbol, t, prev.close));
         }
       }
     }
@@ -958,7 +960,7 @@ function applyLiveQuoteToRows(rows, quote, intervalSeconds = 60, symbol = "") {
   for (let time = last.time + intervalSeconds; time < targetTime; time += intervalSeconds) {
     if (shouldSkipSyntheticKoreanMinute(symbol, time)) continue;
     const previous = next.at(-1);
-    next.push(visibleFlatCandle(symbol, time, previous.close));
+    next.push(visibleSyntheticCandle(symbol, time, previous.close));
   }
   next.push({
     time: targetTime,
