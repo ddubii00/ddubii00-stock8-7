@@ -36,6 +36,7 @@ const UPDATE_INTERVAL_MS = 1_000;
 const CHART_RIGHT_OFFSET = 2;
 const CHART_BAR_SPACING = 6;
 const PRICE_SCALE_WIDTH = 82;
+const FETCH_LIMIT = 900;
 const MA_COLORS = {
   5: "#d92c2c",
   10: "#1f5bd8",
@@ -510,7 +511,7 @@ function applyPayload(state, payload, initial = false) {
   if (!sourceRows.length) return;
   const previousLastTime = state.rows?.at(-1)?.time;
   const wasAtLatest = initial || isViewAtLatest(state);
-  const rows = sourceRows.slice(-state.limit);
+  const rows = sourceRows;
   const latest = rows.at(-1);
   if (!rows.length) return;
 
@@ -573,7 +574,7 @@ async function fetchChart(state) {
     symbol: state.item.symbol,
     name: state.item.name,
     interval: state.interval,
-    limit: String(state.limit + WARMUP_BARS),
+    limit: String(Math.max(FETCH_LIMIT, state.limit + WARMUP_BARS)),
     mode: sessionMode
   });
   const response = await fetch(`/stock8-7/api/chart?${params.toString()}`);
