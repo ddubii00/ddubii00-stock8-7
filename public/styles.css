@@ -174,6 +174,9 @@ body {
 }
 
 .market-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
@@ -189,12 +192,12 @@ body {
 
 .market-item strong {
   display: inline-block;
-  min-width: 9.5ch;
+  min-width: auto;
   margin-left: 0;
   color: var(--text);
   font-size: 14px;
   font-weight: 800;
-  text-align: right;
+  text-align: left;
   font-variant-numeric: tabular-nums;
 }
 
@@ -210,7 +213,7 @@ body {
 
 .market-change {
   display: inline-block;
-  min-width: 14.5ch;
+  min-width: auto;
   margin-left: 0;
   text-align: left;
   font-variant-numeric: tabular-nums;
@@ -220,7 +223,7 @@ body {
   display: inline-flex;
   align-items: center;
   height: 16px;
-  margin-left: 3px;
+  margin-left: 1px;
   padding: 0 5px;
   border-radius: 4px;
   background: rgba(107, 114, 128, 0.12);
