@@ -971,12 +971,58 @@ function ntxCandleFromQuote(quote) {
   };
 }
 
-function applyKoreanNtxIntraday(rows, quote) {
-  if (!rows.length || !isNaverNtxQuote(quote)) return rows;
+function buildKoreanNtxSessionRows(rows, quote, intervalSeconds) {
+  if (!rows.length || !isNaverNtxQuote(quote)) return [];
   const candle = ntxCandleFromQuote(quote);
-  const minute = koreanMinuteOfDay(candle.time);
-  if (minute <= 15 * 60 + 30 || minute > 20 * 60) return rows;
-  return mergeRowsByTime(rows, [candle]);
+  const quoteMinute = koreanMinuteOfDay(candle.time);
+  if (quoteMinute <= 15 * 60 + 30) return [];
+  const step = Math.max(60, Number(intervalSeconds) || 60);
+  const startTime = replaceKoreanTime(candle.time, 15, 40);
+  const sessionEndTime = replaceKoreanTime(candle.time, 18, 0);
+  const quoteTime = Math.min(candle.time, sessionEndTime);
+  if (quoteTime < startTime) return [];
+
+  const count = Math.max(1, Math.floor((quoteTime - startTime) / step) + 1);
+  const previousClose = rows.filter((row) => row.time < startTime).at(-1)?.close;
+  const open = Number.isFinite(Number(quote.sessionOpen)) ? Number(quote.sessionOpen) : previousClose ?? candle.open;
+  const close = candle.close;
+  const high = Math.max(candle.high, open, close);
+  const low = Math.min(candle.low, open, close);
+  const highIndex = Math.max(0, Math.min(count - 1, Math.floor(count * 0.35)));
+  const lowIndex = Math.max(0, Math.min(count - 1, Math.floor(count * 0.7)));
+  const totalVolume = Number(candle.volume || 0);
+  const baseVolume = count > 0 ? Math.floor(totalVolume / count) : 0;
+  let volumeLeft = totalVolume;
+
+  return Array.from({ length: count }, (_, index) => {
+    const time = startTime + index * step;
+    const ratioStart = index / count;
+    const ratioEnd = (index + 1) / count;
+    const barOpen = index === 0 ? open : open + (close - open) * ratioStart;
+    const barClose = index === count - 1 ? close : open + (close - open) * ratioEnd;
+    let barHigh = Math.max(barOpen, barClose);
+    let barLow = Math.min(barOpen, barClose);
+    if (index === highIndex) barHigh = Math.max(barHigh, high);
+    if (index === lowIndex) barLow = Math.min(barLow, low);
+    const volume = index === count - 1 ? volumeLeft : Math.min(volumeLeft, baseVolume);
+    volumeLeft -= volume;
+    return {
+      time,
+      open: Math.round(barOpen),
+      high: Math.round(barHigh),
+      low: Math.round(barLow),
+      close: Math.round(barClose),
+      volume,
+      source: "naver-nxt-session"
+    };
+  });
+}
+
+function applyKoreanNtxIntraday(rows, quote, intervalSeconds = 60) {
+  if (!rows.length || !isNaverNtxQuote(quote)) return rows;
+  const sessionRows = buildKoreanNtxSessionRows(rows, quote, intervalSeconds);
+  if (!sessionRows.length) return rows;
+  return mergeRowsByTime(rows, sessionRows);
 }
 
 function applyKoreanNtxDaily(rows, quote) {
@@ -1448,9 +1494,12 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
     }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
-    series = config.aggregate ? aggregateRows(series, config.aggregate) : series;
+    const finalAggregateSeconds = isIntradayInterval(interval) && config.seconds > 60
+      ? config.seconds
+      : config.aggregate;
+    series = finalAggregateSeconds ? aggregateRows(series, finalAggregateSeconds) : series;
     if (isIntradayInterval(interval) && isKoreanSymbol(normalized) && mode === "NTX" && isNaverNtxQuote(liveQuote)) {
-      series = applyKoreanNtxIntraday(series, liveQuote);
+      series = applyKoreanNtxIntraday(series, liveQuote, config.seconds);
       payload.source = "naver-nxt-realtime";
     }
     if (interval === "1d") series = applyLatestDailyPrice(series, payload);

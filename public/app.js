@@ -27,6 +27,18 @@ const MARKET_ITEMS = [
 
 const DEFAULT_INTERVAL = "1d";
 const DEFAULT_LIMIT = 120;
+const DEFAULT_LIMIT_BY_INTERVAL = {
+  "1m": 400,
+  "3m": 150,
+  "5m": 120,
+  "10m": 100,
+  "15m": 100,
+  "30m": 100,
+  "60m": 100,
+  "1d": 120,
+  "1wk": 120,
+  "1mo": 120
+};
 const STORAGE_KEY = "stock8.selectedCharts.v2";
 const SESSION_MODE_KEY = "stock8.sessionMode.v1";
 const MA_PERIODS = [5, 10, 20, 60, 120, 240];
@@ -144,6 +156,10 @@ function isIntraday(interval) {
 
 function minimumLimitForInterval(interval) {
   return 20;
+}
+
+function defaultLimitForInterval(interval) {
+  return DEFAULT_LIMIT_BY_INTERVAL[interval] || DEFAULT_LIMIT;
 }
 
 function tickFormatter(interval, time) {
@@ -724,7 +740,7 @@ function renderTimeframeButtons(card, state) {
       button.textContent = timeframe.label;
       button.addEventListener("click", async () => {
         state.interval = timeframe.value;
-        state.limit = Math.max(state.limit, minimumLimitForInterval(state.interval));
+        state.limit = defaultLimitForInterval(state.interval);
         card.querySelector(".period-input").value = String(state.limit);
         renderTimeframeButtons(card, state);
         await refreshCard(state, true);
