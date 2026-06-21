@@ -504,9 +504,21 @@ function parseKisIntradayRows(symbol, outputs, options = {}) {
 
 function parseKisIndexIntradayRows(symbol, outputs) {
   const rows = [];
+  const fallbackDate = koreanDateKeyForTimestamp(Math.floor(Date.now() / 1000));
   for (const item of outputs) {
-    const date = item.stck_bsop_date || item.bsop_date || item.trad_date || item.date;
-    const timeValue = item.stck_cntg_hour || item.bstp_nmix_prdy_hour || item.bsop_hour || item.hour || item.time;
+    const date = item.stck_bsop_date
+      || item.bsop_date
+      || item.trad_date
+      || item.trad_dt
+      || item.date
+      || fallbackDate;
+    const timeValue = item.stck_cntg_hour
+      || item.bstp_nmix_prdy_hour
+      || item.bstp_nmix_cntg_hour
+      || item.bsop_hour
+      || item.trad_time
+      || item.time
+      || item.hour;
     const time = koreanDateTimeToUnix(date, timeValue);
     const close = numericField(item.bstp_nmix_prpr, item.stck_prpr, item.prpr, item.nmix, item.close);
     const open = numericField(item.bstp_nmix_oprc, item.stck_oprc, item.open, close);
@@ -622,13 +634,39 @@ async function fetchKisNtxIntradayRows(symbol) {
 async function fetchKisIndexIntradayRows(symbol) {
   const normalized = symbol.trim().toUpperCase();
   if (!KIS_ENABLED || !isKoreanIndex(normalized)) return [];
-  const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-time-indexchartprice", "FHPUP02110200", {
-    FID_COND_MRKT_DIV_CODE: "U",
-    FID_INPUT_ISCD: kisIndexCode(normalized),
-    FID_INPUT_HOUR_1: kisIntradayEndTime()
-  });
-  const outputs = Array.isArray(json.output2) ? json.output2 : Array.isArray(json.output) ? json.output : [];
-  return parseKisIndexIntradayRows(normalized, outputs);
+  const allRawRows = [];
+  let currentEndTime = kisIntradayEndTime();
+
+  for (let page = 0; page < 40; page += 1) {
+    const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-time-indexchartprice", "FHPUP02110200", {
+      FID_COND_MRKT_DIV_CODE: "U",
+      FID_INPUT_ISCD: kisIndexCode(normalized),
+      FID_INPUT_HOUR_1: currentEndTime
+    });
+    const outputs = Array.isArray(json.output2) ? json.output2 : Array.isArray(json.output) ? json.output : [];
+    if (!outputs.length) break;
+    allRawRows.push(...outputs);
+
+    const lastItem = outputs.at(-1);
+    const lastTime = String(
+      lastItem?.stck_cntg_hour
+        || lastItem?.bstp_nmix_prdy_hour
+        || lastItem?.bstp_nmix_cntg_hour
+        || lastItem?.bsop_hour
+        || lastItem?.trad_time
+        || lastItem?.time
+        || ""
+    ).replace(/\D/g, "");
+    if (lastTime.length < 4) break;
+    const hh = Number(lastTime.slice(0, 2));
+    const mm = Number(lastTime.slice(2, 4));
+    if (!Number.isFinite(hh) || !Number.isFinite(mm) || hh < 9) break;
+    const previous = hh * 60 + mm - 1;
+    if (previous < 9 * 60) break;
+    currentEndTime = `${String(Math.floor(previous / 60)).padStart(2, "0")}${String(previous % 60).padStart(2, "0")}00`;
+  }
+
+  return parseKisIndexIntradayRows(normalized, allRawRows);
 }
 
 function validateQuote(quote) {
@@ -1167,6 +1205,15 @@ function mergeRowsByTime(baseRows, overlayRows) {
   return [...byTime.values()].sort((a, b) => a.time - b.time);
 }
 
+function countKoreanMinuteRange(rows, startHour, startMinute, endHour, endMinute) {
+  const start = startHour * 60 + startMinute;
+  const end = endHour * 60 + endMinute;
+  return rows.filter((row) => {
+    const minute = koreanMinuteOfDay(row.time);
+    return minute >= start && minute <= end;
+  }).length;
+}
+
 async function fetchWithTimeout(url, timeoutMs = 3500, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -1475,6 +1522,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
         kisIndexIntradayRows = await fetchKisIndexIntradayRows(normalized);
         kisMeta.indexIntradayOk = true;
         kisMeta.indexIntradayCount = kisIndexIntradayRows.length;
+        kisMeta.indexIntraday1500Count = countKoreanMinuteRange(kisIndexIntradayRows, 15, 0, 15, 19);
       } catch (error) {
         kisMeta.indexIntradayOk = false;
         kisMeta.indexIntradayError = kisErrorMessage(error);
