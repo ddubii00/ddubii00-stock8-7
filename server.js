@@ -10,6 +10,7 @@ const KIS_APP_SECRET = process.env.KIS_APP_SECRET || "";
 const KIS_BASE_URL = (process.env.KIS_BASE_URL || "https://openapi.koreainvestment.com:9443").replace(/\/$/, "");
 const KIS_ENABLED = Boolean(KIS_APP_KEY && KIS_APP_SECRET && KIS_BASE_URL);
 const KIS_TOKEN_SAFETY_MS = 60_000;
+const MAX_QUERY_LIMIT = 700;
 let kisTokenCache = null;
 
 const MIME = {
@@ -479,7 +480,7 @@ function kisIntradayEndTime(now = new Date()) {
   return `${parts.hour}${parts.minute}${parts.second}`;
 }
 
-function parseKisIntradayRows(symbol, outputs) {
+function parseKisIntradayRows(symbol, outputs, options = {}) {
   const rows = [];
   for (const item of outputs) {
     const time = koreanDateTimeToUnix(item.stck_bsop_date, item.stck_cntg_hour);
@@ -496,6 +497,30 @@ function parseKisIntradayRows(symbol, outputs) {
       close,
       volume: numericField(item.cntg_vol, item.acml_vol) || 0,
       source: "kis"
+    });
+  }
+  return normalizeKoreanIntradayRows(symbol, rows, options).sort((a, b) => a.time - b.time);
+}
+
+function parseKisIndexIntradayRows(symbol, outputs) {
+  const rows = [];
+  for (const item of outputs) {
+    const date = item.stck_bsop_date || item.bsop_date || item.trad_date || item.date;
+    const timeValue = item.stck_cntg_hour || item.bstp_nmix_prdy_hour || item.bsop_hour || item.hour || item.time;
+    const time = koreanDateTimeToUnix(date, timeValue);
+    const close = numericField(item.bstp_nmix_prpr, item.stck_prpr, item.prpr, item.nmix, item.close);
+    const open = numericField(item.bstp_nmix_oprc, item.stck_oprc, item.open, close);
+    const high = numericField(item.bstp_nmix_hgpr, item.stck_hgpr, item.high, Math.max(open, close));
+    const low = numericField(item.bstp_nmix_lwpr, item.stck_lwpr, item.low, Math.min(open, close));
+    if (![time, open, high, low, close].every((value) => Number.isFinite(value)) || close <= 0) continue;
+    rows.push({
+      time,
+      open,
+      high: Math.max(high, open, close),
+      low: Math.min(low, open, close),
+      close,
+      volume: numericField(item.acml_vol, item.cntg_vol, item.volume) || 0,
+      source: "kis-index"
     });
   }
   return normalizeKoreanIntradayRows(symbol, rows).sort((a, b) => a.time - b.time);
@@ -545,6 +570,42 @@ async function fetchKisIntradayRows(symbol, yahooLastTime = 0) {
   }
 
   return parseKisIntradayRows(normalized, allRawRows);
+}
+
+async function fetchKisNtxIntradayRows(symbol) {
+  const normalized = symbol.trim().toUpperCase();
+  if (!KIS_ENABLED || !isKoreanSymbol(normalized)) return [];
+  const code = normalized.split(".")[0];
+  let lastError = null;
+  for (const marketCode of ["NX", "N"]) {
+    try {
+      const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice", "FHKST03010200", {
+        FID_ETC_CLS_CODE: "",
+        FID_COND_MRKT_DIV_CODE: marketCode,
+        FID_INPUT_ISCD: code,
+        FID_INPUT_HOUR_1: "180000",
+        FID_PW_DATA_INCU_YN: "Y"
+      });
+      const outputs = Array.isArray(json.output2) ? json.output2 : Array.isArray(json.output) ? json.output : [];
+      const rows = parseKisIntradayRows(normalized, outputs, { allowExtended: true });
+      if (rows.length) return rows.map((row) => ({ ...row, source: "kis-nxt" }));
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error(`KIS NXT intraday not supported for ${normalized}`);
+}
+
+async function fetchKisIndexIntradayRows(symbol) {
+  const normalized = symbol.trim().toUpperCase();
+  if (!KIS_ENABLED || !isKoreanIndex(normalized)) return [];
+  const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-time-indexchartprice", "FHPUP02110200", {
+    FID_COND_MRKT_DIV_CODE: "U",
+    FID_INPUT_ISCD: kisIndexCode(normalized),
+    FID_INPUT_HOUR_1: kisIntradayEndTime()
+  });
+  const outputs = Array.isArray(json.output2) ? json.output2 : Array.isArray(json.output) ? json.output : [];
+  return parseKisIndexIntradayRows(normalized, outputs);
 }
 
 function validateQuote(quote) {
@@ -746,19 +807,42 @@ function minuteBucket(timestamp) {
   return Math.floor(timestamp / 60) * 60;
 }
 
-function normalizeKoreanIntradayRows(symbol, rows) {
+function restoreIntradayWicks(rows) {
+  const sorted = [...rows].sort((a, b) => a.time - b.time);
+  return sorted.map((row, index) => {
+    const prevClose = sorted[index - 1]?.close;
+    const nextClose = sorted[index + 1]?.close;
+    const values = [row.open, row.high, row.low, row.close, prevClose, nextClose]
+      .filter((value) => Number.isFinite(Number(value)) && Number(value) > 0)
+      .map(Number);
+    if (!values.length) return row;
+    const bodyHigh = Math.max(row.open, row.close);
+    const bodyLow = Math.min(row.open, row.close);
+    const high = Math.max(row.high, bodyHigh, ...values);
+    const low = Math.min(row.low, bodyLow, ...values);
+    return { ...row, high, low };
+  });
+}
+
+function normalizeKoreanIntradayRows(symbol, rows, options = {}) {
   if (!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) return rows;
   const byTime = new Map();
   const closingAuctionStart = 15 * 60 + 20;
   const closingAuctionEnd = 15 * 60 + 30;
   const closeMinute = 15 * 60 + 30;
   const finalPrintMinute = 15 * 60 + 31;
+  const allowExtended = Boolean(options.allowExtended);
 
   for (const row of rows) {
     const minute = koreanMinuteOfDay(row.time);
     const time = minute === finalPrintMinute ? replaceKoreanTime(row.time, 15, 30) : minuteBucket(row.time);
-    if (minute >= closingAuctionStart && minute < closingAuctionEnd) continue;
-    if (minute > closeMinute && minute !== finalPrintMinute) continue;
+    const isPreNtx = allowExtended && minute >= 8 * 60 && minute <= 8 * 60 + 50;
+    const isAfterNtx = allowExtended && minute >= 15 * 60 + 40 && minute <= 18 * 60;
+    if (!isPreNtx && !isAfterNtx) {
+      if (minute < 9 * 60) continue;
+      if (minute >= closingAuctionStart && minute < closingAuctionEnd) continue;
+      if (minute > closeMinute && minute !== finalPrintMinute) continue;
+    }
     const existing = byTime.get(time);
     if (!existing) {
       byTime.set(time, { ...row, time });
@@ -774,7 +858,7 @@ function normalizeKoreanIntradayRows(symbol, rows) {
     });
   }
 
-  return [...byTime.values()].sort((a, b) => a.time - b.time);
+  return restoreIntradayWicks([...byTime.values()].sort((a, b) => a.time - b.time));
 }
 
 function applyKoreanClosingPrint(symbol, rows, payload) {
@@ -802,6 +886,43 @@ function applyKoreanClosingPrint(symbol, rows, payload) {
         volume: 0
       });
   return next.sort((a, b) => a.time - b.time);
+}
+
+function fillKoreanIndexClosingMinutes(symbol, rows) {
+  if (!isKoreanIndex(symbol) || !rows.length) return rows;
+  const sorted = [...rows].sort((a, b) => a.time - b.time);
+  const byTime = new Map(sorted.map((row) => [row.time, row]));
+  const dates = [...new Set(sorted.map((row) => koreanDateKeyForTimestamp(row.time)))];
+
+  for (const dateKey of dates) {
+    const sample = sorted.find((row) => koreanDateKeyForTimestamp(row.time) === dateKey);
+    if (!sample) continue;
+    const anchor = sample.time;
+    const start = replaceKoreanTime(anchor, 15, 0);
+    const end = replaceKoreanTime(anchor, 15, 30);
+    const startRow = byTime.get(start);
+    const endRow = byTime.get(end);
+    if (!startRow || !endRow) continue;
+    for (let minute = 1; minute <= 19; minute += 1) {
+      const time = start + minute * 60;
+      if (byTime.has(time)) continue;
+      const ratioStart = (minute - 1) / 30;
+      const ratioEnd = minute / 30;
+      const open = startRow.close + (endRow.close - startRow.close) * ratioStart;
+      const close = startRow.close + (endRow.close - startRow.close) * ratioEnd;
+      byTime.set(time, {
+        time,
+        open,
+        high: Math.max(open, close),
+        low: Math.min(open, close),
+        close,
+        volume: 0,
+        source: "index-gap-fill"
+      });
+    }
+  }
+
+  return restoreIntradayWicks([...byTime.values()].sort((a, b) => a.time - b.time));
 }
 
 function parseDailyCsv(text) {
@@ -971,26 +1092,13 @@ function ntxCandleFromQuote(quote) {
   };
 }
 
-function buildKoreanNtxSessionRows(rows, quote, intervalSeconds) {
-  if (!rows.length || !isNaverNtxQuote(quote)) return [];
-  const candle = ntxCandleFromQuote(quote);
-  const quoteMinute = koreanMinuteOfDay(candle.time);
-  if (quoteMinute <= 15 * 60 + 30) return [];
+function buildKoreanNtxSessionRange({ startTime, endTime, intervalSeconds, open, high, low, close, volume, source }) {
   const step = Math.max(60, Number(intervalSeconds) || 60);
-  const startTime = replaceKoreanTime(candle.time, 15, 40);
-  const sessionEndTime = replaceKoreanTime(candle.time, 18, 0);
-  const quoteTime = Math.min(candle.time, sessionEndTime);
-  if (quoteTime < startTime) return [];
-
-  const count = Math.max(1, Math.floor((quoteTime - startTime) / step) + 1);
-  const previousClose = rows.filter((row) => row.time < startTime).at(-1)?.close;
-  const open = Number.isFinite(Number(quote.sessionOpen)) ? Number(quote.sessionOpen) : previousClose ?? candle.open;
-  const close = candle.close;
-  const high = Math.max(candle.high, open, close);
-  const low = Math.min(candle.low, open, close);
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime < startTime) return [];
+  const count = Math.max(1, Math.floor((endTime - startTime) / step) + 1);
   const highIndex = Math.max(0, Math.min(count - 1, Math.floor(count * 0.35)));
   const lowIndex = Math.max(0, Math.min(count - 1, Math.floor(count * 0.7)));
-  const totalVolume = Number(candle.volume || 0);
+  const totalVolume = Math.max(0, Number(volume || 0));
   const baseVolume = count > 0 ? Math.floor(totalVolume / count) : 0;
   let volumeLeft = totalVolume;
 
@@ -1013,9 +1121,82 @@ function buildKoreanNtxSessionRows(rows, quote, intervalSeconds) {
       low: Math.round(barLow),
       close: Math.round(barClose),
       volume,
-      source: "naver-nxt-session"
+      source
     };
   });
+}
+
+function findKoreanRowAtOrAfter(rows, timestamp) {
+  return rows.find((row) => row.time >= timestamp);
+}
+
+function findKoreanRowAtOrBefore(rows, timestamp) {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    if (rows[index].time <= timestamp) return rows[index];
+  }
+  return null;
+}
+
+function buildKoreanNtxSessionRows(rows, quote, intervalSeconds) {
+  if (!rows.length || !isNaverNtxQuote(quote)) return [];
+  const candle = ntxCandleFromQuote(quote);
+  const quoteMinute = koreanMinuteOfDay(candle.time);
+  if (quoteMinute < 8 * 60) return [];
+
+  const preStart = replaceKoreanTime(candle.time, 8, 0);
+  const preEnd = replaceKoreanTime(candle.time, 8, 50);
+  const regularOpenTime = replaceKoreanTime(candle.time, 9, 0);
+  const regularCloseTime = replaceKoreanTime(candle.time, 15, 30);
+  const afterStart = replaceKoreanTime(candle.time, 15, 40);
+  const afterEnd = replaceKoreanTime(candle.time, 18, 0);
+  const regularOpen = findKoreanRowAtOrAfter(rows, regularOpenTime)?.close;
+  const regularClose = findKoreanRowAtOrBefore(rows, regularCloseTime)?.close;
+  const sessionOpen = Number.isFinite(Number(quote.sessionOpen)) ? Number(quote.sessionOpen) : candle.open;
+  const sessionClose = candle.close;
+  const sessionHigh = Math.max(candle.high, sessionOpen, sessionClose);
+  const sessionLow = Math.min(candle.low, sessionOpen, sessionClose);
+  const totalVolume = Number(candle.volume || 0);
+  const preVolume = Math.round(totalVolume * 0.35);
+  const afterVolume = Math.max(0, totalVolume - preVolume);
+  const rowsToMerge = [];
+
+  if (quoteMinute >= 8 * 60) {
+    const actualPreEnd = Math.min(candle.time, preEnd);
+    if (actualPreEnd >= preStart) {
+      const preClose = Number.isFinite(regularOpen) ? regularOpen : sessionOpen;
+      rowsToMerge.push(...buildKoreanNtxSessionRange({
+        startTime: preStart,
+        endTime: actualPreEnd,
+        intervalSeconds,
+        open: sessionOpen,
+        high: Math.max(sessionHigh, sessionOpen, preClose),
+        low: Math.min(sessionOpen, preClose),
+        close: preClose,
+        volume: preVolume,
+        source: "naver-nxt-pre-session"
+      }));
+    }
+  }
+
+  if (quoteMinute >= 15 * 60 + 40) {
+    const actualAfterEnd = Math.min(candle.time, afterEnd);
+    if (actualAfterEnd >= afterStart) {
+      const afterOpen = Number.isFinite(regularClose) ? regularClose : sessionOpen;
+      rowsToMerge.push(...buildKoreanNtxSessionRange({
+        startTime: afterStart,
+        endTime: actualAfterEnd,
+        intervalSeconds,
+        open: afterOpen,
+        high: Math.max(afterOpen, sessionClose),
+        low: Math.min(sessionLow, afterOpen, sessionClose),
+        close: sessionClose,
+        volume: afterVolume,
+        source: "naver-nxt-after-session"
+      }));
+    }
+  }
+
+  return rowsToMerge;
 }
 
 function applyKoreanNtxIntraday(rows, quote, intervalSeconds = 60) {
@@ -1367,6 +1548,8 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     const useNtxQuote = mode === "NTX" && isUsSymbol(normalized);
     let liveQuote = null;
     let kisIntradayRows = [];
+    let kisNtxIntradayRows = [];
+    let kisIndexIntradayRows = [];
     let naverMinuteRows = [];
     const preferNaverNxt = mode === "NTX" && isKoreanSymbol(normalized);
     const includePrePost = useNtxQuote && isIntradayInterval(interval);
@@ -1399,6 +1582,30 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       } catch (error) {
         kisMeta.intradayOk = false;
         kisMeta.intradayError = kisErrorMessage(error);
+      }
+    }
+
+    if (KIS_ENABLED && isKoreanSymbol(normalized) && isIntradayInterval(interval) && preferNaverNxt) {
+      kisMeta.ntxIntradayAttempted = true;
+      try {
+        kisNtxIntradayRows = await fetchKisNtxIntradayRows(normalized);
+        kisMeta.ntxIntradayOk = true;
+        kisMeta.ntxIntradayCount = kisNtxIntradayRows.length;
+      } catch (error) {
+        kisMeta.ntxIntradayOk = false;
+        kisMeta.ntxIntradayError = kisErrorMessage(error);
+      }
+    }
+
+    if (KIS_ENABLED && isKoreanIndex(normalized) && isIntradayInterval(interval)) {
+      kisMeta.indexIntradayAttempted = true;
+      try {
+        kisIndexIntradayRows = await fetchKisIndexIntradayRows(normalized);
+        kisMeta.indexIntradayOk = true;
+        kisMeta.indexIntradayCount = kisIndexIntradayRows.length;
+      } catch (error) {
+        kisMeta.indexIntradayOk = false;
+        kisMeta.indexIntradayError = kisErrorMessage(error);
       }
     }
 
@@ -1490,15 +1697,26 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       series = mergeRowsByTime(series, kisIntradayRows);
       payload.source = liveQuote?.source === "kis" ? "kis" : "kis-intraday";
     }
+    if (isIntradayInterval(interval) && kisNtxIntradayRows.length) {
+      series = mergeRowsByTime(series, kisNtxIntradayRows);
+      payload.source = "kis-nxt-intraday";
+    }
+    if (isIntradayInterval(interval) && kisIndexIntradayRows.length) {
+      series = mergeRowsByTime(series, kisIndexIntradayRows);
+      payload.source = "kis-index-intraday";
+    }
     if (isIntradayInterval(interval) && liveQuote && (isKoreanSymbol(normalized) || isKoreanIndex(normalized)) && !isNaverNtxQuote(liveQuote)) {
       series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
     }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
+    if (isIntradayInterval(interval) && isKoreanIndex(normalized) && !kisIndexIntradayRows.length) {
+      series = fillKoreanIndexClosingMinutes(normalized, series);
+    }
     const finalAggregateSeconds = isIntradayInterval(interval) && config.seconds > 60
       ? config.seconds
       : config.aggregate;
     series = finalAggregateSeconds ? aggregateRows(series, finalAggregateSeconds) : series;
-    if (isIntradayInterval(interval) && isKoreanSymbol(normalized) && mode === "NTX" && isNaverNtxQuote(liveQuote)) {
+    if (isIntradayInterval(interval) && isKoreanSymbol(normalized) && mode === "NTX" && isNaverNtxQuote(liveQuote) && !kisNtxIntradayRows.length) {
       series = applyKoreanNtxIntraday(series, liveQuote, config.seconds);
       payload.source = "naver-nxt-realtime";
     }
@@ -1510,7 +1728,10 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     if (isIntradayInterval(interval) && liveQuote && !isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) {
       series = applyLiveQuoteToRows(series, liveQuote, config.seconds, normalized);
     }
-    const trimmed = series.slice(-limit);
+    const effectiveLimit = isIntradayInterval(interval) && isKoreanSymbol(normalized) && mode === "NTX"
+      ? Math.max(limit, 620)
+      : limit;
+    const trimmed = series.slice(-effectiveLimit);
     const lastClose = trimmed.at(-1)?.close;
     const prevClose = trimmed.at(-2)?.close;
     let price = payload.price;
@@ -1661,7 +1882,7 @@ createServer(async (req, res) => {
 
   if (pathname === "/api/candles") {
     const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
-    const limit = Math.min(260, Math.max(40, Number(url.searchParams.get("limit") || 140)));
+    const limit = Math.min(MAX_QUERY_LIMIT, Math.max(40, Number(url.searchParams.get("limit") || 140)));
     await sendJson(res, {
       ok: true,
       symbol,
@@ -1689,7 +1910,7 @@ createServer(async (req, res) => {
   if (pathname === "/api/chart") {
     const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
     const interval = url.searchParams.get("interval") || "1d";
-    const limit = Math.min(900, Math.max(20, Number(url.searchParams.get("limit") || 120)));
+    const limit = Math.min(MAX_QUERY_LIMIT, Math.max(20, Number(url.searchParams.get("limit") || 120)));
     const payload = await getChart(symbol, interval, limit, url.searchParams.get("mode") || "KRX");
     await sendJson(res, {
       ok: true,

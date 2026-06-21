@@ -27,6 +27,7 @@ const MARKET_ITEMS = [
 
 const DEFAULT_INTERVAL = "1d";
 const DEFAULT_LIMIT = 120;
+const MAX_LIMIT = 700;
 const DEFAULT_LIMIT_BY_INTERVAL = {
   "1m": 400,
   "3m": 150,
@@ -48,7 +49,8 @@ const UPDATE_INTERVAL_MS = 1_000;
 const CHART_RIGHT_OFFSET = 2;
 const CHART_BAR_SPACING = 6;
 const PRICE_SCALE_WIDTH = 82;
-const FETCH_LIMIT = 900;
+const FETCH_LIMIT = 700;
+const NTX_VISIBLE_LIMIT = 620;
 const MA_COLORS = {
   5: "#d92c2c",
   10: "#1f5bd8",
@@ -253,7 +255,9 @@ function createLwChart(container, state) {
   const candleSeries = chart.addCandlestickSeries({
     upColor: "#d92c2c",
     downColor: "#1f5bd8",
-    borderVisible: false,
+    borderVisible: true,
+    borderUpColor: "#d92c2c",
+    borderDownColor: "#1f5bd8",
     wickUpColor: "#d92c2c",
     wickDownColor: "#1f5bd8",
     lastValueVisible: true,
@@ -380,7 +384,9 @@ function showTooltip(state, param) {
 }
 
 function visibleRows(state) {
-  return state.rows?.slice(-state.limit) || [];
+  const isKoreanNtxIntraday = sessionMode === "NTX" && isIntraday(state.interval) && isKoreanSymbol(state.item.symbol);
+  const limit = isKoreanNtxIntraday ? Math.min(MAX_LIMIT, Math.max(state.limit, NTX_VISIBLE_LIMIT)) : state.limit;
+  return state.rows?.slice(-limit) || [];
 }
 
 function keepLatestVisible(state) {
@@ -754,7 +760,7 @@ function bindPeriod(card, state) {
   const input = card.querySelector(".period-input");
   input.value = String(state.limit);
   const apply = async () => {
-    const next = Math.min(500, Math.max(minimumLimitForInterval(state.interval), Number(input.value || DEFAULT_LIMIT)));
+    const next = Math.min(MAX_LIMIT, Math.max(minimumLimitForInterval(state.interval), Number(input.value || DEFAULT_LIMIT)));
     input.value = String(next);
     state.limit = next;
     await refreshCard(state, true);
