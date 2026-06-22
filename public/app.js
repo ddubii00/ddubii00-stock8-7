@@ -51,6 +51,15 @@ const CHART_BAR_SPACING = 6;
 const PRICE_SCALE_WIDTH = 82;
 const FETCH_LIMIT = 700;
 const NTX_VISIBLE_LIMIT = 620;
+const INTERVAL_SECONDS = {
+  "1m": 60,
+  "3m": 180,
+  "5m": 300,
+  "10m": 600,
+  "15m": 900,
+  "30m": 1800,
+  "60m": 3600
+};
 const MA_COLORS = {
   5: "#d92c2c",
   10: "#1f5bd8",
@@ -389,6 +398,35 @@ function visibleRows(state) {
   return state.rows?.slice(-limit) || [];
 }
 
+function localDateKeyForSymbol(symbol, timestamp) {
+  const timeZone = (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) ? "Asia/Seoul" : "America/New_York";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date(timestamp * 1000));
+}
+
+function shouldIgnoreIntradayPayload(state, rows, initial) {
+  if (initial || !isIntraday(state.interval) || !state.rows?.length || !rows?.length) return false;
+  const previousLatest = state.rows.at(-1);
+  const nextLatest = rows.at(-1);
+  if (!previousLatest || !nextLatest) return false;
+  const previousTime = Number(previousLatest.time);
+  const nextTime = Number(nextLatest.time);
+  if (!Number.isFinite(previousTime) || !Number.isFinite(nextTime)) return false;
+  if (nextTime < previousTime) return true;
+  const seconds = INTERVAL_SECONDS[state.interval] || 60;
+  const priorNext = rows.at(-2);
+  const priorNextTime = Number(priorNext?.time);
+  const sameTailDate = Number.isFinite(priorNextTime)
+    && localDateKeyForSymbol(state.item.symbol, priorNextTime) === localDateKeyForSymbol(state.item.symbol, nextTime);
+  if (sameTailDate && nextTime - priorNextTime > seconds * 2.5) return true;
+  if (rows.length < Math.max(30, state.rows.length * 0.75)) return true;
+  return false;
+}
+
 function keepLatestVisible(state) {
   const rows = visibleRows(state);
   if (!rows.length) return;
@@ -536,6 +574,7 @@ function applyPayload(state, payload, initial = false) {
   const rows = sourceRows;
   const latest = rows.at(-1);
   if (!rows.length) return;
+  if (shouldIgnoreIntradayPayload(state, rows, initial)) return;
 
   state.sourceRows = sourceRows;
   state.rows = rows;
