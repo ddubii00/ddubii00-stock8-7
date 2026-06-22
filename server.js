@@ -1159,6 +1159,8 @@ function applyLiveQuoteToRows(rows, quote, intervalSeconds = 60, symbol = "") {
   const last = next.at(-1);
   const quoteTime = Number(quote.marketTime || quote.asOf || Math.floor(Date.now() / 1000));
   const bucketTime = normalizeLiveQuoteBucket(symbol, Math.floor(quoteTime / intervalSeconds) * intervalSeconds);
+  const now = Math.floor(Date.now() / 1000);
+  if (bucketTime > now + Math.max(120, intervalSeconds)) return rows;
   const stepCount = Math.max(0, Math.floor((bucketTime - last.time) / intervalSeconds));
   const targetTime = stepCount > 0 ? last.time + stepCount * intervalSeconds : last.time;
   if (targetTime === last.time) {
@@ -1214,46 +1216,9 @@ function countKoreanMinuteRange(rows, startHour, startMinute, endHour, endMinute
   }).length;
 }
 
-function fillKoreanIndexRegularGap(symbol, rows) {
-  if (!isKoreanIndex(symbol) || !rows?.length) return rows;
-  const sorted = [...rows].sort((a, b) => a.time - b.time);
-  const byTime = new Map(sorted.map((row) => [row.time, row]));
-  const byDate = new Map();
-  for (const row of sorted) {
-    const key = koreanDateKeyForTimestamp(row.time);
-    if (!byDate.has(key)) byDate.set(key, []);
-    byDate.get(key).push(row);
-  }
-
-  for (const dateRows of byDate.values()) {
-    dateRows.sort((a, b) => a.time - b.time);
-    const sessionRow = dateRows.find((row) => koreanMinuteOfDay(row.time) === 15 * 60)
-      || [...dateRows].reverse().find((row) => koreanMinuteOfDay(row.time) < 15 * 60);
-    const closingRow = dateRows.find((row) => koreanMinuteOfDay(row.time) === 15 * 60 + 30)
-      || dateRows.find((row) => koreanMinuteOfDay(row.time) > 15 * 60 + 20)
-      || sessionRow;
-    if (!sessionRow) continue;
-
-    let previous = byTime.get(replaceKoreanTime(sessionRow.time, 14, 59)) || sessionRow;
-    for (let minute = 15 * 60; minute <= 15 * 60 + 20; minute += 1) {
-      const time = replaceKoreanTime(sessionRow.time, Math.floor(minute / 60), minute % 60);
-      if (byTime.has(time)) {
-        previous = byTime.get(time);
-        continue;
-      }
-      const denominator = Math.max(1, closingRow.time - sessionRow.time);
-      const progress = Math.min(1, Math.max(0, (time - sessionRow.time) / denominator));
-      const close = sessionRow.close + (closingRow.close - sessionRow.close) * progress;
-      const open = previous.close;
-      const high = Math.max(open, close);
-      const low = Math.min(open, close);
-      const row = { time, open, high, low, close, volume: 0, source: "index-gap-fallback" };
-      byTime.set(time, row);
-      previous = row;
-    }
-  }
-
-  return [...byTime.values()].sort((a, b) => a.time - b.time);
+function removeFutureIntradayRows(rows, intervalSeconds = 60) {
+  const cutoff = Math.floor(Date.now() / 1000) + Math.max(120, intervalSeconds);
+  return rows.filter((row) => Number(row.time) <= cutoff);
 }
 
 async function fetchWithTimeout(url, timeoutMs = 3500, options = {}) {
@@ -1671,16 +1636,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
     }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
-    if (isIntradayInterval(interval) && isKoreanIndex(normalized) && !kisIndexIntradayRows.length) {
-      const beforeGapCount = countKoreanMinuteRange(series, 15, 0, 15, 20);
-      series = fillKoreanIndexRegularGap(normalized, series);
-      const afterGapCount = countKoreanMinuteRange(series, 15, 0, 15, 20);
-      if (afterGapCount > beforeGapCount) {
-        payload.source = payload.source || "index-gap-fallback";
-        kisMeta.indexGapFallback = true;
-        kisMeta.indexGapFallback1500Count = afterGapCount;
-      }
-    }
+    if (isIntradayInterval(interval)) series = removeFutureIntradayRows(series, config.seconds);
     const finalAggregateSeconds = isIntradayInterval(interval) && config.seconds > 60
       ? config.seconds
       : config.aggregate;
