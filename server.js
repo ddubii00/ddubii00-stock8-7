@@ -805,8 +805,8 @@ function parseNaverMinuteRows(symbol, text) {
 
 async function fetchNaverMinuteRows(symbol, anchorTimestamp) {
   const normalized = symbol.trim().toUpperCase();
-  if (!isKoreanSymbol(normalized)) return [];
-  const code = normalized.split(".")[0];
+  if (!isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) return [];
+  const code = isKoreanIndex(normalized) ? naverIndexCode(normalized) : normalized.split(".")[0];
   const dateKey = koreanDateKeyForTimestamp(anchorTimestamp || Math.floor(Date.now() / 1000));
   const url = `https://api.finance.naver.com/siseJson.naver?symbol=${encodeURIComponent(code)}&requestType=1&startTime=${dateKey}0900&endTime=${dateKey}1530&timeframe=minute`;
   const response = await fetchWithTimeout(url, 3500);
@@ -1544,7 +1544,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       }
     }
 
-    if (isKoreanSymbol(normalized) && isIntradayInterval(interval)) {
+    if ((isKoreanSymbol(normalized) || isKoreanIndex(normalized)) && isIntradayInterval(interval)) {
       try {
         const naverAnchor = liveQuote?.marketTime || liveQuote?.asOf || yahooLastTime || Math.floor(Date.now() / 1000);
         naverMinuteRows = await fetchNaverMinuteRows(normalized, naverAnchor);

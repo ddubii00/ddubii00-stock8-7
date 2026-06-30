@@ -430,9 +430,11 @@ function shouldIgnoreIntradayPayload(state, rows, initial) {
 function keepLatestVisible(state) {
   const rows = visibleRows(state);
   if (!rows.length) return;
-  const to = state.rows.length - 1 + CHART_RIGHT_OFFSET;
+  const total = state.rows.length;
+  const visible = rows.length;
+  const to = Math.max(0, total - 1 + CHART_RIGHT_OFFSET);
   state.instance.chart.timeScale().setVisibleLogicalRange({
-    from: Math.max(0, state.rows.length - rows.length),
+    from: Math.max(0, total - visible),
     to
   });
 }
@@ -570,7 +572,6 @@ function applyPayload(state, payload, initial = false) {
   const sourceRows = payload.series || [];
   if (!sourceRows.length) return;
   const previousLastTime = state.rows?.at(-1)?.time;
-  const wasAtLatest = initial || isViewAtLatest(state);
   const rows = sourceRows;
   const latest = rows.at(-1);
   if (!rows.length) return;
@@ -625,7 +626,7 @@ function applyPayload(state, payload, initial = false) {
   }
 
   renderLegend(state, payload);
-  if (wasAtLatest) keepLatestVisible(state);
+  if (isIntraday(state.interval)) keepLatestVisible(state);
   requestAnimationFrame(() => drawMacdBackground(state));
   state.card.classList.add("loaded");
 }
