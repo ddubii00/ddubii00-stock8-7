@@ -516,6 +516,20 @@ function kisIntradayEndTime(now = new Date()) {
   return `${parts.hour}${parts.minute}${parts.second}`;
 }
 
+function kisNtxIntradayEndTime(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+  const minute = Number(parts.hour) * 60 + Number(parts.minute);
+  if (minute >= 20 * 60) return "200000";
+  if (minute >= 15 * 60 + 40) return `${parts.hour}${parts.minute}${parts.second}`;
+  return "200000";
+}
+
 function parseKisIntradayRows(symbol, outputs, options = {}) {
   const rows = [];
   for (const item of outputs) {
@@ -678,7 +692,7 @@ async function fetchKisNtxIntradayRows(symbol) {
   let lastError = null;
   for (const marketCode of ["NX", "N", "J"]) {
     const allRawRows = [];
-    let currentEndTime = "180000";
+    let currentEndTime = kisNtxIntradayEndTime();
     try {
       for (let page = 0; page < 40; page += 1) {
         const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice", "FHKST03010200", {
@@ -701,13 +715,20 @@ async function fetchKisNtxIntradayRows(symbol) {
         const previous = hh * 60 + mm - 1;
         currentEndTime = `${String(Math.floor(previous / 60)).padStart(2, "0")}${String(previous % 60).padStart(2, "0")}00`;
       }
+      const latestDate = allRawRows
+        .map((item) => String(item?.stck_bsop_date || "").replace(/\D/g, ""))
+        .filter((date) => date.length === 8)
+        .sort()
+        .at(-1);
       const outputs = allRawRows.filter((item) => {
+        const date = String(item?.stck_bsop_date || "").replace(/\D/g, "");
+        if (latestDate && date !== latestDate) return false;
         const time = String(item?.stck_cntg_hour || "");
         const hh = Number(time.slice(0, 2));
         const mm = Number(time.slice(2, 4));
         const minute = hh * 60 + mm;
         return (minute >= 8 * 60 && minute <= 8 * 60 + 50)
-          || (minute >= 15 * 60 + 40 && minute <= 18 * 60);
+          || (minute >= 15 * 60 + 40 && minute <= 20 * 60);
       });
       const rows = parseKisIntradayRows(normalized, outputs, { allowExtended: true });
       if (rows.length) return rows.map((row) => ({ ...row, source: "kis-nxt" }));
@@ -1005,7 +1026,7 @@ function normalizeKoreanIntradayRows(symbol, rows, options = {}) {
     const isDelayedClosingPrint = minute >= finalPrintStart && minute <= finalPrintEnd;
     const time = isDelayedClosingPrint ? replaceKoreanTime(row.time, 15, 30) : minuteBucket(row.time);
     const isPreNtx = allowExtended && minute >= 8 * 60 && minute <= 8 * 60 + 50;
-    const isAfterNtx = allowExtended && minute >= 15 * 60 + 40 && minute <= 18 * 60;
+    const isAfterNtx = allowExtended && minute >= 15 * 60 + 40 && minute <= 20 * 60;
     if (!isPreNtx && !isAfterNtx) {
       if (minute < 9 * 60) continue;
       if (minute >= closingAuctionStart && minute < closingAuctionEnd) continue;
@@ -1221,6 +1242,16 @@ function ntxCandleFromQuote(quote) {
     volume: Number(quote.sessionVolume || 0),
     source: "naver-nxt-realtime"
   };
+}
+
+function applyKoreanNtxIntradayQuote(rows, quote) {
+  if (!rows.length || !isNaverNtxQuote(quote)) return rows;
+  const candle = ntxCandleFromQuote(quote);
+  const minute = koreanMinuteOfDay(candle.time);
+  const isNtxSession = (minute >= 8 * 60 && minute <= 8 * 60 + 50)
+    || (minute >= 15 * 60 + 40 && minute <= 20 * 60);
+  if (!isNtxSession) return rows;
+  return mergeRowsByTime(rows, [candle]);
 }
 
 function applyKoreanNtxDaily(rows, quote) {
@@ -1745,6 +1776,10 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     if (isIntradayInterval(interval) && kisNtxIntradayRows.length) {
       series = mergeRowsByTime(series, kisNtxIntradayRows);
       payload.source = "kis-nxt-intraday";
+    }
+    if (isIntradayInterval(interval) && isKoreanSymbol(normalized) && mode === "NTX" && isNaverNtxQuote(liveQuote)) {
+      series = applyKoreanNtxIntradayQuote(series, liveQuote);
+      if (!kisNtxIntradayRows.length) payload.source = "naver-nxt-realtime";
     }
     if (isIntradayInterval(interval) && kisIndexIntradayRows.length) {
       series = mergeRowsByTime(series, kisIndexIntradayRows);
