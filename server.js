@@ -276,6 +276,41 @@ function numericField(...values) {
   return NaN;
 }
 
+function rawStringValue(value) {
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+function pickRawValue(item, keys) {
+  for (const key of keys) {
+    const value = rawStringValue(item?.[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function pickMatchingRawValue(item, keyPattern, valuePattern) {
+  for (const [key, value] of Object.entries(item || {})) {
+    if (!keyPattern.test(key)) continue;
+    const text = rawStringValue(value);
+    const digits = text.replace(/\D/g, "");
+    if (valuePattern.test(digits)) return text;
+  }
+  return "";
+}
+
+function pickNumericValue(item, keys, keyPattern) {
+  const direct = numericField(...keys.map((key) => item?.[key]));
+  if (Number.isFinite(direct)) return direct;
+  for (const [key, value] of Object.entries(item || {})) {
+    if (!keyPattern.test(key)) continue;
+    if (/(vol|qty|rate|sign|vrss|diff|cnt|rate|율|대비)/i.test(key)) continue;
+    const number = numericField(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return NaN;
+}
+
 function forexMarketStatus(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
@@ -475,6 +510,7 @@ function kisIntradayEndTime(now = new Date()) {
     hourCycle: "h23"
   }).formatToParts(now).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
   const minute = Number(parts.hour) * 60 + Number(parts.minute);
+  if (minute >= 15 * 60 + 32) return "153200";
   if (minute >= 15 * 60 + 31) return "153100";
   if (minute < 9 * 60) return "090000";
   return `${parts.hour}${parts.minute}${parts.second}`;
@@ -505,25 +541,34 @@ function parseKisIntradayRows(symbol, outputs, options = {}) {
 function parseKisIndexIntradayRows(symbol, outputs) {
   const rows = [];
   const fallbackDate = koreanDateKeyForTimestamp(Math.floor(Date.now() / 1000));
+  const dateKeys = [
+    "stck_bsop_date", "bsop_date", "trad_date", "trad_dt", "trd_date", "trd_dt",
+    "date", "stck_date", "output_date", "hts_date", "xymd"
+  ];
+  const timeKeys = [
+    "stck_cntg_hour", "bstp_nmix_prdy_hour", "bstp_nmix_cntg_hour", "bsop_hour",
+    "trad_time", "trad_tm", "trd_time", "trd_tm", "cntg_hour", "hour", "time", "tm"
+  ];
   for (const item of outputs) {
-    const date = item.stck_bsop_date
-      || item.bsop_date
-      || item.trad_date
-      || item.trad_dt
-      || item.date
+    const date = pickRawValue(item, dateKeys)
+      || pickMatchingRawValue(item, /(date|dt|ymd|bsop)/i, /^\d{8}$/)
       || fallbackDate;
-    const timeValue = item.stck_cntg_hour
-      || item.bstp_nmix_prdy_hour
-      || item.bstp_nmix_cntg_hour
-      || item.bsop_hour
-      || item.trad_time
-      || item.time
-      || item.hour;
+    const timeValue = pickRawValue(item, timeKeys)
+      || pickMatchingRawValue(item, /(time|hour|tm|cntg)/i, /^\d{4,6}$/);
     const time = koreanDateTimeToUnix(date, timeValue);
-    const close = numericField(item.bstp_nmix_prpr, item.stck_prpr, item.prpr, item.nmix, item.close);
-    const open = numericField(item.bstp_nmix_oprc, item.stck_oprc, item.open, close);
-    const high = numericField(item.bstp_nmix_hgpr, item.stck_hgpr, item.high, Math.max(open, close));
-    const low = numericField(item.bstp_nmix_lwpr, item.stck_lwpr, item.low, Math.min(open, close));
+    const close = pickNumericValue(item, [
+      "bstp_nmix_prpr", "bstp_nmix", "stck_prpr", "prpr", "nmix", "close", "clpr",
+      "idx_prpr", "jisu", "price", "last"
+    ], /(prpr|nmix|close|clpr|price|last|jisu|idx)/i);
+    const open = numericField(pickNumericValue(item, [
+      "bstp_nmix_oprc", "stck_oprc", "oprc", "open", "ov"
+    ], /(oprc|open)/i), close);
+    const high = numericField(pickNumericValue(item, [
+      "bstp_nmix_hgpr", "stck_hgpr", "hgpr", "high", "hv"
+    ], /(hgpr|high)/i), Math.max(open, close));
+    const low = numericField(pickNumericValue(item, [
+      "bstp_nmix_lwpr", "stck_lwpr", "lwpr", "low", "lv"
+    ], /(lwpr|low)/i), Math.min(open, close));
     if (![time, open, high, low, close].every((value) => Number.isFinite(value)) || close <= 0) continue;
     rows.push({
       time,
@@ -531,11 +576,18 @@ function parseKisIndexIntradayRows(symbol, outputs) {
       high: Math.max(high, open, close),
       low: Math.min(low, open, close),
       close,
-      volume: numericField(item.acml_vol, item.cntg_vol, item.volume) || 0,
+      volume: numericField(item.acml_vol, item.cntg_vol, item.volume, item.tvol, item.vol) || 0,
       source: "kis-index"
     });
   }
   return normalizeKoreanIntradayRows(symbol, rows).sort((a, b) => a.time - b.time);
+}
+
+function kisIndexRawTimeValue(item) {
+  return pickRawValue(item, [
+    "stck_cntg_hour", "bstp_nmix_prdy_hour", "bstp_nmix_cntg_hour", "bsop_hour",
+    "trad_time", "trad_tm", "trd_time", "trd_tm", "cntg_hour", "hour", "time", "tm"
+  ]) || pickMatchingRawValue(item, /(time|hour|tm|cntg)/i, /^\d{4,6}$/);
 }
 
 async function fetchKisIntradayRows(symbol, yahooLastTime = 0) {
@@ -643,20 +695,18 @@ async function fetchKisIndexIntradayRows(symbol) {
       FID_INPUT_ISCD: kisIndexCode(normalized),
       FID_INPUT_HOUR_1: currentEndTime
     });
-    const outputs = Array.isArray(json.output2) ? json.output2 : Array.isArray(json.output) ? json.output : [];
+    const outputs = Array.isArray(json.output2)
+      ? json.output2
+      : Array.isArray(json.output)
+        ? json.output
+        : Array.isArray(json.output1)
+          ? json.output1
+          : [];
     if (!outputs.length) break;
     allRawRows.push(...outputs);
 
     const lastItem = outputs.at(-1);
-    const lastTime = String(
-      lastItem?.stck_cntg_hour
-        || lastItem?.bstp_nmix_prdy_hour
-        || lastItem?.bstp_nmix_cntg_hour
-        || lastItem?.bsop_hour
-        || lastItem?.trad_time
-        || lastItem?.time
-        || ""
-    ).replace(/\D/g, "");
+    const lastTime = kisIndexRawTimeValue(lastItem).replace(/\D/g, "");
     if (lastTime.length < 4) break;
     const hh = Number(lastTime.slice(0, 2));
     const mm = Number(lastTime.slice(2, 4));
@@ -891,18 +941,20 @@ function normalizeKoreanIntradayRows(symbol, rows, options = {}) {
   const closingAuctionStart = 15 * 60 + 20;
   const closingAuctionEnd = 15 * 60 + 30;
   const closeMinute = 15 * 60 + 30;
-  const finalPrintMinute = 15 * 60 + 31;
+  const finalPrintStart = 15 * 60 + 31;
+  const finalPrintEnd = 15 * 60 + 32;
   const allowExtended = Boolean(options.allowExtended);
 
   for (const row of rows) {
     const minute = koreanMinuteOfDay(row.time);
-    const time = minute === finalPrintMinute ? replaceKoreanTime(row.time, 15, 30) : minuteBucket(row.time);
+    const isDelayedClosingPrint = minute >= finalPrintStart && minute <= finalPrintEnd;
+    const time = isDelayedClosingPrint ? replaceKoreanTime(row.time, 15, 30) : minuteBucket(row.time);
     const isPreNtx = allowExtended && minute >= 8 * 60 && minute <= 8 * 60 + 50;
     const isAfterNtx = allowExtended && minute >= 15 * 60 + 40 && minute <= 18 * 60;
     if (!isPreNtx && !isAfterNtx) {
       if (minute < 9 * 60) continue;
       if (minute >= closingAuctionStart && minute < closingAuctionEnd) continue;
-      if (minute > closeMinute && minute !== finalPrintMinute) continue;
+      if (minute > closeMinute && !isDelayedClosingPrint) continue;
     }
     const existing = byTime.get(time);
     if (!existing) {
