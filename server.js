@@ -583,6 +583,41 @@ function parseKisIndexIntradayRows(symbol, outputs) {
   return normalizeKoreanIntradayRows(symbol, rows).sort((a, b) => a.time - b.time);
 }
 
+function parseKisIndexTimepriceRows(symbol, outputs) {
+  const points = [];
+  const fallbackDate = koreanDateKeyForTimestamp(Math.floor(Date.now() / 1000));
+  for (const item of outputs) {
+    const date = pickRawValue(item, ["stck_bsop_date", "bsop_date", "date", "trd_date", "trd_dt"])
+      || pickMatchingRawValue(item, /(date|dt|ymd|bsop)/i, /^\d{8}$/)
+      || fallbackDate;
+    const timeValue = pickRawValue(item, ["bsop_hour", "stck_cntg_hour", "cntg_hour", "time", "hour", "tm"])
+      || pickMatchingRawValue(item, /(bsop|time|hour|tm|cntg)/i, /^\d{4,6}$/);
+    const time = koreanDateTimeToUnix(date, timeValue);
+    const close = numericField(item.bstp_nmix_prpr, item.prpr, item.nmix, item.close);
+    if (!Number.isFinite(time) || !Number.isFinite(close) || close <= 0) continue;
+    points.push({
+      time,
+      close,
+      volume: numericField(item.cntg_vol, item.acml_vol, item.volume) || 0
+    });
+  }
+
+  const ordered = points.sort((a, b) => a.time - b.time);
+  const rows = ordered.map((point, index) => {
+    const open = index > 0 ? ordered[index - 1].close : point.close;
+    return {
+      time: point.time,
+      open,
+      high: Math.max(open, point.close),
+      low: Math.min(open, point.close),
+      close: point.close,
+      volume: point.volume,
+      source: "kis-index-timeprice"
+    };
+  });
+  return normalizeKoreanIntradayRows(symbol, rows).sort((a, b) => a.time - b.time);
+}
+
 function kisIndexRawTimeValue(item) {
   return pickRawValue(item, [
     "stck_cntg_hour", "bstp_nmix_prdy_hour", "bstp_nmix_cntg_hour", "bsop_hour",
@@ -717,6 +752,26 @@ async function fetchKisIndexIntradayRows(symbol) {
   }
 
   return parseKisIndexIntradayRows(normalized, allRawRows);
+}
+
+async function fetchKisIndexTimepriceRows(symbol) {
+  const normalized = symbol.trim().toUpperCase();
+  if (!KIS_ENABLED || !isKoreanIndex(normalized)) return [];
+  const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-index-timeprice", "FHPUP02110200", {
+    FID_INPUT_HOUR_1: "60",
+    FID_INPUT_ISCD: kisIndexCode(normalized),
+    FID_COND_MRKT_DIV_CODE: "U"
+  });
+  const outputs = Array.isArray(json.output)
+    ? json.output
+    : Array.isArray(json.output2)
+      ? json.output2
+      : Array.isArray(json.output1)
+        ? json.output1
+        : json.output
+          ? [json.output]
+          : [];
+  return parseKisIndexTimepriceRows(normalized, outputs);
 }
 
 function validateQuote(quote) {
@@ -1528,6 +1583,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     let kisIntradayRows = [];
     let kisNtxIntradayRows = [];
     let kisIndexIntradayRows = [];
+    let kisIndexTimepriceRows = [];
     let naverMinuteRows = [];
     const preferNaverNxt = mode === "NTX" && isKoreanSymbol(normalized);
     const includePrePost = useNtxQuote && isIntradayInterval(interval);
@@ -1585,6 +1641,16 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       } catch (error) {
         kisMeta.indexIntradayOk = false;
         kisMeta.indexIntradayError = kisErrorMessage(error);
+      }
+      kisMeta.indexTimepriceAttempted = true;
+      try {
+        kisIndexTimepriceRows = await fetchKisIndexTimepriceRows(normalized);
+        kisMeta.indexTimepriceOk = true;
+        kisMeta.indexTimepriceCount = kisIndexTimepriceRows.length;
+        kisMeta.indexTimeprice1500Count = countKoreanMinuteRange(kisIndexTimepriceRows, 15, 0, 15, 19);
+      } catch (error) {
+        kisMeta.indexTimepriceOk = false;
+        kisMeta.indexTimepriceError = kisErrorMessage(error);
       }
     }
 
@@ -1683,6 +1749,10 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     if (isIntradayInterval(interval) && kisIndexIntradayRows.length) {
       series = mergeRowsByTime(series, kisIndexIntradayRows);
       payload.source = "kis-index-intraday";
+    }
+    if (isIntradayInterval(interval) && kisIndexTimepriceRows.length) {
+      series = mergeRowsByTime(series, kisIndexTimepriceRows);
+      payload.source = "kis-index-timeprice";
     }
     if (isIntradayInterval(interval) && liveQuote && (isKoreanSymbol(normalized) || isKoreanIndex(normalized)) && !isNaverNtxQuote(liveQuote)) {
       series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
