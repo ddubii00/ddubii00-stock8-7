@@ -12,6 +12,10 @@ const KIS_ENABLED = Boolean(KIS_APP_KEY && KIS_APP_SECRET && KIS_BASE_URL);
 const KIS_TOKEN_SAFETY_MS = 60_000;
 const MAX_QUERY_LIMIT = 700;
 let kisTokenCache = null;
+let koreanMasterCache = {
+  loadedAt: 0,
+  items: []
+};
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -822,13 +826,24 @@ function naverSignedChange(value, direction) {
   return Math.abs(number);
 }
 
+function isReasonableNtxPrice(ntxPrice, regularPrice) {
+  if (!Number.isFinite(ntxPrice) || ntxPrice <= 0) return false;
+  if (!Number.isFinite(regularPrice) || regularPrice <= 0) return true;
+  return ntxPrice >= regularPrice * 0.5 && ntxPrice <= regularPrice * 1.5;
+}
+
 function parseNaverRealtimeQuote(symbol, item, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
-  const useNxt = mode === "NTX" && isKoreanSymbol(normalized) && item.overMarketPriceInfo;
+  const regularPrice = numericField(item.closePriceRaw, item.closePrice);
+  const rawNxtPrice = numericField(item.overMarketPriceInfo?.overPrice);
+  const useNxt = mode === "NTX"
+    && isKoreanSymbol(normalized)
+    && item.overMarketPriceInfo
+    && isReasonableNtxPrice(rawNxtPrice, regularPrice);
   const direction = useNxt ? item.overMarketPriceInfo.compareToPreviousPrice : item.compareToPreviousPrice;
   const price = useNxt
-    ? numericField(item.overMarketPriceInfo.overPrice, item.closePriceRaw, item.closePrice)
-    : numericField(item.closePriceRaw, item.closePrice);
+    ? rawNxtPrice
+    : regularPrice;
   const change = useNxt
     ? naverSignedChange(item.overMarketPriceInfo.compareToPreviousClosePrice, direction)
     : naverSignedChange(item.compareToPreviousClosePriceRaw ?? item.compareToPreviousClosePrice, direction);
@@ -1389,6 +1404,48 @@ function decodeHtml(value = "") {
     .replace(/&gt;/g, ">");
 }
 
+function decodeKoreanPage(buffer) {
+  try {
+    return new TextDecoder("euc-kr").decode(buffer);
+  } catch {
+    return new TextDecoder("utf-8").decode(buffer);
+  }
+}
+
+async function fetchNaverMarketListPage(market, page) {
+  const response = await fetchWithTimeout(`https://finance.naver.com/sise/sise_market_sum.naver?sosok=${market}&page=${page}`, 2600);
+  if (!response.ok) return [];
+  const html = decodeKoreanPage(await response.arrayBuffer());
+  const suffix = market === 1 ? ".KQ" : ".KS";
+  const items = [];
+  for (const match of html.matchAll(/<a[^>]+href=["']\/item\/main\.naver\?code=(\d{6})["'][^>]*>([^<]+)<\/a>/gi)) {
+    const code = match[1];
+    const name = decodeHtml(match[2]).replace(/\s+/g, " ").trim();
+    if (!name || /^\d+$/.test(name)) continue;
+    items.push({ symbol: `${code}${suffix}`, name });
+  }
+  return items;
+}
+
+async function loadKoreanMasterSymbols() {
+  const now = Date.now();
+  if (koreanMasterCache.items.length && now - koreanMasterCache.loadedAt < 12 * 60 * 60 * 1000) {
+    return koreanMasterCache.items;
+  }
+  const pageNumbers = Array.from({ length: 45 }, (_, index) => index + 1);
+  const groups = await Promise.all([
+    ...pageNumbers.map((page) => fetchNaverMarketListPage(0, page).catch(() => [])),
+    ...pageNumbers.map((page) => fetchNaverMarketListPage(1, page).catch(() => []))
+  ]);
+  const bySymbol = new Map();
+  for (const item of groups.flat()) {
+    if (item.symbol && item.name && !bySymbol.has(item.symbol)) bySymbol.set(item.symbol, item);
+  }
+  const items = [...bySymbol.values()];
+  if (items.length) koreanMasterCache = { loadedAt: now, items };
+  return koreanMasterCache.items;
+}
+
 function staticSearch(query) {
   const q = query.trim().toLowerCase();
   const compact = compactText(q);
@@ -1476,6 +1533,27 @@ async function searchKoreanSymbols(query) {
   }
 }
 
+async function searchKoreanMasterSymbols(query) {
+  if (!/[가-힣]|\d{6}/.test(query)) return [];
+  const compact = compactText(query);
+  if (!compact) return [];
+  const items = await loadKoreanMasterSymbols();
+  return items
+    .map((item) => {
+      const code = item.symbol.replace(/\.(KS|KQ)$/, "");
+      const name = compactText(item.name);
+      let score = 99;
+      if (code === compact || name === compact) score = 0;
+      else if (code.startsWith(compact) || name.startsWith(compact)) score = 1;
+      else if (name.includes(compact)) score = 2;
+      return { item, score };
+    })
+    .filter(({ score }) => score < 99)
+    .sort((a, b) => a.score - b.score || a.item.name.localeCompare(b.item.name, "ko"))
+    .slice(0, 12)
+    .map(({ item }) => item);
+}
+
 function suffixFromText(text = "") {
   if (/코스닥|KOSDAQ/i.test(text)) return ".KQ";
   if (/코스피|KOSPI/i.test(text)) return ".KS";
@@ -1538,12 +1616,13 @@ async function searchUsSymbols(query) {
 
 async function searchSymbols(query) {
   const staticMatches = staticSearch(query);
-  const [koreanMatches, naverWebMatches, usMatches] = await Promise.all([
+  const [koreanMatches, koreanMasterMatches, naverWebMatches, usMatches] = await Promise.all([
     searchKoreanSymbols(query),
+    searchKoreanMasterSymbols(query),
     searchNaverWebSymbols(query),
     searchUsSymbols(query)
   ]);
-  return mergeSearchResults(staticMatches, koreanMatches, naverWebMatches, usMatches);
+  return mergeSearchResults(staticMatches, koreanMatches, koreanMasterMatches, naverWebMatches, usMatches);
 }
 
 function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {
