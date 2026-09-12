@@ -4,7 +4,9 @@ const INITIAL_CHARTS = [
 ];
 const TIMEFRAMES = [["1분", "1m"], ["3분", "3m"], ["5분", "5m"], ["10분", "10m"], ["15분", "15m"], ["30분", "30m"], ["1시간", "60m"], ["일", "1d"], ["주", "1wk"], ["월", "1mo"]];
 const MARKET_ITEMS = [{ label: "달러/원", symbol: "KRW=X", decimals: 2 }, { label: "KOSPI", symbol: "^KS11", decimals: 2 }, { label: "KOSDAQ", symbol: "^KQ11", decimals: 2 }, { label: "나스닥", symbol: "^IXIC", decimals: 2 }];
-const DEFAULT_LIMIT_BY_INTERVAL = { "1m": 400, "3m": 150, "5m": 120, "10m": 100, "15m": 100, "30m": 100, "60m": 100, "1d": 120, "1wk": 120, "1mo": 120 };
+// Naver's 3-minute view covers roughly five trading days. Keep the same usable
+// range by default; users can still lower or raise it with 조회기간.
+const DEFAULT_LIMIT_BY_INTERVAL = { "1m": 700, "3m": 700, "5m": 500, "10m": 300, "15m": 240, "30m": 180, "60m": 150, "1d": 120, "1wk": 120, "1mo": 120 };
 const STORAGE_KEY = "stock12.threeLineBreak.charts.v1";
 const SESSION_MODE_KEY = "stock12.threeLineBreak.session.v1";
 const REFRESH_MS = 30_000;
@@ -39,15 +41,26 @@ function ema(values, period) {
 }
 function macd(rows) { const closes = rows.map((row) => Number(row.close)); const fast = ema(closes, 12); const slow = ema(closes, 26); return fast.map((value, index) => value - slow[index]); }
 
-// This deliberately uses closing prices only. A reversal waits until price moves
-// past the high or low of the previous three completed lines.
+// Standard three-line-break construction (the same convention used by Naver):
+// continuation follows the prior line's close; a reversal needs a close beyond
+// the high/low of the previous three completed lines. Input is closing prices.
 function threeLineBreak(rows) {
   if (!rows.length) return [];
-  const lines = [{ open: Number(rows[0].close), close: Number(rows[0].close), time: rows[0].time, direction: 0 }];
+  const firstClose = Number(rows[0].close);
+  const lines = [{ open: firstClose, close: firstClose, high: firstClose, low: firstClose, time: rows[0].time, direction: 0 }];
   for (const row of rows.slice(1)) {
-    const close = Number(row.close); const recent = lines.slice(-3).map((line) => line.close);
-    const shouldRise = close > Math.max(...recent); const shouldFall = close < Math.min(...recent);
-    if (shouldRise || shouldFall) { const last = lines[lines.length - 1]; lines.push({ open: last.close, close, time: row.time, direction: shouldRise ? 1 : -1 }); }
+    const close = Number(row.close);
+    const last = lines[lines.length - 1];
+    const recent = lines.slice(-3);
+    const reversalHigh = Math.max(...recent.map((line) => line.high));
+    const reversalLow = Math.min(...recent.map((line) => line.low));
+    const risingContinuation = (last.direction >= 0 && close > last.close);
+    const fallingContinuation = (last.direction <= 0 && close < last.close);
+    const risingReversal = last.direction < 0 && close > reversalHigh;
+    const fallingReversal = last.direction > 0 && close < reversalLow;
+    if (!risingContinuation && !fallingContinuation && !risingReversal && !fallingReversal) continue;
+    const direction = risingContinuation || risingReversal ? 1 : -1;
+    lines.push({ open: last.close, close, high: Math.max(last.close, close), low: Math.min(last.close, close), time: row.time, direction });
   }
   return lines;
 }
@@ -61,13 +74,21 @@ function drawChart(state) {
   const { canvas, rows, lines, macdValues } = state; if (!canvas || !rows?.length || !lines?.length) return;
   const { width, height, ratio } = resizeCanvas(canvas); const ctx = canvas.getContext("2d");
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
-  const pad = { top: 52, right: 70, bottom: 30, left: 12 }; const chartW = Math.max(1, width - pad.left - pad.right); const chartH = Math.max(1, height - pad.top - pad.bottom);
+  // Reserve a header lane for the symbol and current price on narrow cards.
+  const pad = { top: 88, right: 70, bottom: 30, left: 12 }; const chartW = Math.max(1, width - pad.left - pad.right); const chartH = Math.max(1, height - pad.top - pad.bottom);
   const values = lines.flatMap((line) => [line.open, line.close]); const min = Math.min(...values); const max = Math.max(...values); const spread = Math.max(max - min, Math.abs(max || 1) * .015); const low = min - spread * .09; const high = max + spread * .09;
   const y = (value) => pad.top + (high - value) / (high - low) * chartH; const xForRow = (index) => pad.left + index / Math.max(rows.length - 1, 1) * chartW;
-  const magnitude = Math.max(...macdValues.map((value) => Math.abs(value)), 1);
-  for (let index = 0; index < rows.length; index += 1) {
-    const value = macdValues[index] || 0; const alpha = .035 + Math.min(Math.abs(value) / magnitude, 1) * .12; ctx.fillStyle = value >= 0 ? `rgba(239,83,80,${alpha})` : `rgba(21,101,192,${alpha})`;
-    const next = index === rows.length - 1 ? pad.left + chartW : xForRow(index + 1); ctx.fillRect(xForRow(index), pad.top, Math.max(1, next - xForRow(index) + 1), chartH);
+  // MACD background is a flat color by sign, never a magnitude gradient.
+  let regionStart = 0;
+  let sign = (macdValues[0] || 0) >= 0 ? 1 : -1;
+  for (let index = 1; index <= rows.length; index += 1) {
+    const nextSign = index < rows.length && (macdValues[index] || 0) >= 0 ? 1 : -1;
+    if (index < rows.length && nextSign === sign) continue;
+    const left = xForRow(regionStart);
+    const right = index >= rows.length ? pad.left + chartW : xForRow(index);
+    ctx.fillStyle = sign > 0 ? "rgba(239,83,80,.09)" : "rgba(21,101,192,.09)";
+    ctx.fillRect(left, pad.top, Math.max(1, right - left), chartH);
+    regionStart = index; sign = nextSign;
   }
   ctx.strokeStyle = "rgba(111,132,161,.2)"; ctx.lineWidth = 1; ctx.font = "11px Inter, sans-serif"; ctx.textAlign = "left";
   for (let row = 0; row <= 4; row += 1) { const lineY = pad.top + chartH * row / 4; ctx.beginPath(); ctx.moveTo(pad.left, lineY); ctx.lineTo(pad.left + chartW, lineY); ctx.stroke(); ctx.fillStyle = "#68758b"; ctx.fillText(formatNumber(high - (high - low) * row / 4, decimalsFor(state.item.symbol)), pad.left + chartW + 8, lineY + 4); }
@@ -86,7 +107,7 @@ function showTooltip(state, event) {
 async function fetchJson(path) { const response = await fetch(`${apiBase}${path}`, { cache: "no-store" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json(); }
 function updateQuote(state, payload) {
   const latest = payload.series?.[payload.series.length - 1]; const price = Number(payload.price || latest?.close); const change = Number(payload.changePercent ?? payload.changeRate ?? ((price / Number(payload.previousClose) - 1) * 100)); const up = change >= 0;
-  state.card.querySelector(".last-price").textContent = formatNumber(price, payload.decimals ?? decimalsFor(state.item.symbol)); const changeEl = state.card.querySelector(".last-change"); changeEl.textContent = Number.isFinite(change) ? `${up ? "+" : ""}${change.toFixed(2)}%` : "--"; changeEl.className = `last-change ${up ? "up" : "down"}`;
+  const priceEl = state.card.querySelector(".last-price"); priceEl.textContent = formatNumber(price, payload.decimals ?? decimalsFor(state.item.symbol)); priceEl.className = `last-price ${up ? "up" : "down"}`; const changeEl = state.card.querySelector(".last-change"); changeEl.textContent = Number.isFinite(change) ? `${up ? "+" : ""}${change.toFixed(2)}%` : "--"; changeEl.className = `last-change ${up ? "up" : "down"}`;
   const source = payload.source?.startsWith("kis") ? "KIS 실시간" : payload.source?.startsWith("naver") ? "네이버 실시간" : "Yahoo / 공개 시세"; state.card.querySelector(".market-status").textContent = `${source} · ${payload.marketStatus || "갱신"}`;
 }
 function showSignalAlert(state, kind, time) {
