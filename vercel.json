@@ -1,0 +1,7 @@
+{
+  "version": 2,
+  "rewrites": [
+    { "source": "/stock12", "destination": "/" },
+    { "source": "/stock12/(.*)", "destination": "/$1" }
+  ]
+}

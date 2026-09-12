@@ -2002,7 +2002,11 @@ async function sendJson(res, payload) {
 }
 
 function appPathname(url) {
-  const stripped = url.pathname.replace(/^\/stock8-7(?=\/|$)/, "");
+  // No setting uses /stock12; BASE_PATH=/ intentionally means root service.
+  const basePath = process.env.BASE_PATH == null ? "/stock12" : process.env.BASE_PATH.replace(/\/$/, "");
+  const stripped = basePath && (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`))
+    ? url.pathname.slice(basePath.length)
+    : url.pathname;
   return stripped || "/";
 }
 
@@ -2023,7 +2027,7 @@ async function serveStatic(req, res) {
   }
 }
 
-createServer(async (req, res) => {
+export async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = appPathname(url);
 
@@ -2089,7 +2093,17 @@ createServer(async (req, res) => {
   }
 
   await serveStatic(req, res);
-}).listen(PORT, () => {
-  console.log(`stock8 four-candle dashboard: http://127.0.0.1:${PORT}`);
-  console.log(`KIS realtime: ${KIS_ENABLED ? "enabled" : "disabled"}`);
-});
+}
+
+if (process.argv[1]?.endsWith("server.js")) {
+  createServer((req, res) => {
+    handleRequest(req, res).catch((error) => {
+      console.error("Request failed", error);
+      res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: "데이터를 불러오지 못했습니다." }));
+    });
+  }).listen(PORT, () => {
+    console.log(`stock12 three-line-break dashboard: http://127.0.0.1:${PORT}`);
+    console.log(`KIS realtime: ${KIS_ENABLED ? "enabled" : "disabled"}`);
+  });
+}
