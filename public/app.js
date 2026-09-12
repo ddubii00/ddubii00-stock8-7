@@ -149,6 +149,22 @@ function drawLegacyChart(state) {
   state.drawnLines.forEach((line) => { const top = Math.min(line.y1, line.y2); const brickHeight = Math.max(2, Math.abs(line.y2 - line.y1)); const rising = line.direction >= 0; ctx.fillStyle = rising ? "#ef5350" : "#1565c0"; ctx.fillRect(line.x - line.width / 2, top, line.width, brickHeight); ctx.strokeStyle = rising ? "#c62828" : "#0d47a1"; ctx.strokeRect(line.x - line.width / 2, top, line.width, brickHeight); });
   ctx.fillStyle = "#68758b"; const labels = [rows[0], rows[Math.floor(rows.length / 2)], rows[rows.length - 1]]; labels.forEach((row, index) => ctx.fillText(timeText(row.time, state.interval).slice(2), pad.left + chartW * index / 2, height - 10));
 }
+function drawCrosshair(state, ctx) {
+  const crosshair = state.crosshair; const geometry = state.chartGeometry;
+  if (!crosshair || !geometry) return;
+  const { pad, width, height, chartH, low, high } = geometry;
+  const right = width - pad.right; const bottom = height - pad.bottom;
+  const x = Math.min(right, Math.max(pad.left, crosshair.x)); const lineY = Math.min(bottom, Math.max(pad.top, crosshair.y));
+  const price = high - (lineY - pad.top) / chartH * (high - low);
+  const priceText = formatNumber(price, decimalsFor(state.item.symbol)); const timeLabel = timeText(crosshair.time, state.interval);
+  ctx.save(); ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.strokeStyle = "rgba(48,67,95,.72)";
+  ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, bottom); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.left, lineY); ctx.lineTo(right, lineY); ctx.stroke(); ctx.setLineDash([]);
+  ctx.font = "700 10px Inter, sans-serif"; const priceWidth = Math.ceil(ctx.measureText(priceText).width) + 10; const priceX = right + 3; const priceY = Math.min(bottom - 18, Math.max(pad.top, lineY - 9));
+  ctx.fillStyle = "#31496d"; ctx.fillRect(priceX, priceY, Math.min(priceWidth, width - priceX - 2), 18); ctx.fillStyle = "#fff"; ctx.textAlign = "left"; ctx.fillText(priceText, priceX + 5, priceY + 13);
+  const timeWidth = Math.ceil(ctx.measureText(timeLabel).width) + 10; const timeX = Math.min(right - timeWidth, Math.max(pad.left, x - timeWidth / 2)); const timeY = bottom + 4;
+  ctx.fillStyle = "#31496d"; ctx.fillRect(timeX, timeY, timeWidth, 18); ctx.fillStyle = "#fff"; ctx.fillText(timeLabel, timeX + 5, timeY + 13); ctx.restore();
+}
 function drawChart(state) {
   const { canvas, rows, lines, macdValues, pnfColumns } = state;
   if (!canvas || !rows?.length) return;
@@ -159,6 +175,7 @@ function drawChart(state) {
   if (!plotValues.length) return;
   const min = Math.min(...plotValues); const max = Math.max(...plotValues); const spread = Math.max(max - min, Math.abs(max || 1) * .015); const low = min - spread * .09; const high = max + spread * .09;
   const y = (value) => pad.top + (high - value) / (high - low) * chartH; const xForRow = (index) => pad.left + index / Math.max(rows.length - 1, 1) * chartW;
+  state.chartGeometry = { pad, width, height, chartH, low, high };
 
   // Keep the MACD background flat, and extend it under the timeframe/type controls.
   let regionStart = 0; let sign = (macdValues[0] || 0) >= 0 ? 1 : -1;
@@ -185,10 +202,13 @@ function drawChart(state) {
   }
   const timeline = state.drawnLines.length ? [state.drawnLines[0], state.drawnLines[Math.floor(state.drawnLines.length / 2)], state.drawnLines[state.drawnLines.length - 1]] : [rows[0], rows[Math.floor(rows.length / 2)], rows[rows.length - 1]];
   ctx.fillStyle = "#68758b"; ctx.font = "11px Inter, sans-serif"; ctx.textAlign = "left"; timeline.forEach((row, index) => ctx.fillText(timeText(row.time, state.interval).slice(2), pad.left + chartW * index / 2, height - 10));
+  drawCrosshair(state, ctx);
 }
 function showTooltip(state, event) {
-  const rect = state.canvas.getBoundingClientRect(); const x = event.clientX - rect.left;
+  const rect = state.canvas.getBoundingClientRect(); const x = event.clientX - rect.left; const pointerY = event.clientY - rect.top; const geometry = state.chartGeometry;
+  if (!geometry || x < geometry.pad.left || x > geometry.width - geometry.pad.right || pointerY < geometry.pad.top || pointerY > geometry.height - geometry.pad.bottom) { state.crosshair = null; state.tooltip.classList.remove("visible"); drawChart(state); return; }
   const nearest = state.drawnLines?.reduce((best, line) => !best || Math.abs(line.x - x) < Math.abs(best.x - x) ? line : best, null); if (!nearest) return;
+  state.crosshair = { x, y: pointerY, time: nearest.time }; drawChart(state);
   const change = ((nearest.close / nearest.open - 1) * 100) || 0;
   state.tooltip.innerHTML = `<b>${timeText(nearest.time, state.interval)}</b><br>시가 ${formatNumber(nearest.open, decimalsFor(state.item.symbol))} · 종가 ${formatNumber(nearest.close, decimalsFor(state.item.symbol))}<br><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}%</span>`;
   state.tooltip.style.left = `${Math.min(rect.width - 180, Math.max(8, x + 12))}px`; state.tooltip.style.top = `${Math.max(55, event.clientY - rect.top - 58)}px`; state.tooltip.classList.add("visible");
@@ -226,7 +246,7 @@ function evaluateSignals(state) {
 }
 async function refreshChart(state, showLoading = false) {
   if (state.loading) return; state.loading = true; if (showLoading) state.loadingEl.classList.add("visible");
-  try { const params = new URLSearchParams({ symbol: state.item.symbol, name: state.item.name, interval: state.interval, limit: String(state.limit), mode: sessionMode }); const payload = await fetchJson(`/chart?${params}`); const rows = (payload.series || []).filter((row) => Number.isFinite(Number(row.close))).slice(-state.limit); if (!rows.length) throw new Error("empty series"); state.rows = rows; state.macdValues = macd(rows); updateChartGeometry(state); drawChart(state); updateQuote(state, payload); evaluateSignals(state); state.card.classList.remove("error"); }
+  try { const params = new URLSearchParams({ symbol: state.item.symbol, name: state.item.name, interval: state.interval, limit: String(state.limit), mode: sessionMode }); const payload = await fetchJson(`/chart?${params}`); const rows = (payload.series || []).filter((row) => Number.isFinite(Number(row.close))).slice(-state.limit); if (!rows.length) throw new Error("empty series"); state.rows = rows; state.macdValues = macd(rows); state.crosshair = null; updateChartGeometry(state); drawChart(state); updateQuote(state, payload); evaluateSignals(state); state.card.classList.remove("error"); }
   catch (error) { state.card.classList.add("error"); state.card.querySelector(".market-status").textContent = "데이터 재시도 중"; console.warn("Chart refresh failed", error); }
   finally { state.loading = false; state.loadingEl.classList.remove("visible"); }
 }
@@ -247,12 +267,12 @@ async function suggestSymbols(state, query) {
 }
 function createCard(item, index) {
   const card = template.content.firstElementChild.cloneNode(true); chartGrid.append(card);
-  const state = { item, card, canvas: card.querySelector("canvas"), tooltip: card.querySelector(".price-tooltip"), loadingEl: card.querySelector(".loading"), alert: card.querySelector(".signal-alert"), interval: "1d", limit: 120, chartType: "three-line", rows: [], lines: [], threeLines: [], pnfColumns: [], macdValues: [], drawnLines: [], viewOffset: 0, maxViewOffset: 0, previousMacdSign: null, pendingTwoLineAlert: null };
+  const state = { item, card, canvas: card.querySelector("canvas"), tooltip: card.querySelector(".price-tooltip"), loadingEl: card.querySelector(".loading"), alert: card.querySelector(".signal-alert"), interval: "1d", limit: 120, chartType: "three-line", rows: [], lines: [], threeLines: [], pnfColumns: [], macdValues: [], drawnLines: [], viewOffset: 0, maxViewOffset: 0, crosshair: null, chartGeometry: null, previousMacdSign: null, pendingTwoLineAlert: null };
   card.querySelector(".symbol-input").value = item.name; card.querySelector(".symbol-code").textContent = `티커 ${tickerFor(item.symbol)}`;
-  state.canvas.addEventListener("pointermove", (event) => { if (state.dragStartX != null) { const delta = state.dragStartX - event.clientX; const step = Math.max(4, state.canvas.clientWidth / 100); state.viewOffset = Math.min(state.maxViewOffset, Math.max(0, state.dragOriginOffset + Math.round(delta / step))); drawChart(state); return; } showTooltip(state, event); });
-  state.canvas.addEventListener("pointerdown", (event) => { state.dragStartX = event.clientX; state.dragOriginOffset = state.viewOffset; state.canvas.setPointerCapture(event.pointerId); state.tooltip.classList.remove("visible"); });
+  state.canvas.addEventListener("pointermove", (event) => { if (state.dragStartX != null) { const delta = state.dragStartX - event.clientX; const step = Math.max(4, state.canvas.clientWidth / 100); state.viewOffset = Math.min(state.maxViewOffset, Math.max(0, state.dragOriginOffset + Math.round(delta / step))); state.crosshair = null; state.tooltip.classList.remove("visible"); drawChart(state); return; } showTooltip(state, event); });
+  state.canvas.addEventListener("pointerdown", (event) => { state.dragStartX = event.clientX; state.dragOriginOffset = state.viewOffset; state.crosshair = null; state.canvas.setPointerCapture(event.pointerId); state.tooltip.classList.remove("visible"); drawChart(state); });
   state.canvas.addEventListener("pointerup", (event) => { state.dragStartX = null; state.canvas.releasePointerCapture?.(event.pointerId); });
-  state.canvas.addEventListener("pointercancel", () => { state.dragStartX = null; }); state.canvas.addEventListener("pointerleave", () => { if (state.dragStartX == null) state.tooltip.classList.remove("visible"); });
+  state.canvas.addEventListener("pointercancel", () => { state.dragStartX = null; }); state.canvas.addEventListener("pointerleave", () => { if (state.dragStartX == null) { state.crosshair = null; state.tooltip.classList.remove("visible"); drawChart(state); } });
   const input = card.querySelector(".symbol-input"); let searchTimer; input.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => suggestSymbols(state, input.value), 180); }); input.addEventListener("focus", () => suggestSymbols(state, input.value)); input.addEventListener("blur", () => setTimeout(() => card.querySelector(".suggestions").replaceChildren(), 150));
   const period = card.querySelector(".period-input"); period.addEventListener("change", () => { state.limit = Math.min(700, Math.max(20, Number(period.value) || defaultLimit(state.interval))); period.value = state.limit; state.previousMacdSign = null; state.pendingTwoLineAlert = null; refreshChart(state, true); }); state.alert.querySelector("button").addEventListener("click", () => state.alert.classList.remove("visible")); chartState.set(index, state); renderTimeframes(state); renderChartTypes(state); refreshChart(state, true); return state;
 }
