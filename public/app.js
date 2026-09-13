@@ -162,12 +162,31 @@ function drawLegacyChart(state) {
 function drawCrosshair(state, ctx) {
   const crosshair = state.crosshair; const geometry = state.chartGeometry;
   if (!crosshair || !geometry) return;
-  const { pad, width, height } = geometry;
+  const { pad, width, height, chartH, low, high } = geometry;
   const right = width - pad.right; const bottom = height - pad.bottom;
   const x = Math.min(right, Math.max(pad.left, crosshair.x)); const lineY = Math.min(bottom, Math.max(pad.top, crosshair.y));
   ctx.save(); ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.strokeStyle = "rgba(48,67,95,.72)";
   ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, bottom); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(pad.left, lineY); ctx.lineTo(right, lineY); ctx.stroke(); ctx.restore();
+  ctx.beginPath(); ctx.moveTo(pad.left, lineY); ctx.lineTo(right, lineY); ctx.stroke(); ctx.setLineDash([]);
+
+  const price = high - (lineY - pad.top) / chartH * (high - low); const priceText = formatNumber(price, decimalsFor(state.item.symbol));
+  const fullTime = timeText(crosshair.time, state.interval); const timeLabel = isIntraday(state.interval) ? fullTime.slice(11) : fullTime;
+  ctx.font = "700 9px Inter, sans-serif"; ctx.textAlign = "left";
+  const priceWidth = Math.ceil(ctx.measureText(priceText).width) + 7; const priceX = right + 2; const priceY = Math.min(bottom - 14, Math.max(pad.top, lineY - 7));
+  ctx.fillStyle = "rgba(49,73,109,.88)"; ctx.fillRect(priceX, priceY, Math.min(priceWidth, width - priceX - 1), 14); ctx.fillStyle = "#fff"; ctx.fillText(priceText, priceX + 3, priceY + 10);
+  const timeWidth = Math.ceil(ctx.measureText(timeLabel).width) + 7; const timeX = Math.min(right - timeWidth, Math.max(pad.left, x - timeWidth / 2)); const timeY = bottom + 5;
+  ctx.fillStyle = "rgba(49,73,109,.88)"; ctx.fillRect(timeX, timeY, timeWidth, 14); ctx.fillStyle = "#fff"; ctx.fillText(timeLabel, timeX + 3, timeY + 10); ctx.restore();
+}
+function drawDateBoundaries(state, ctx, pad, bottom) {
+  if (!isIntraday(state.interval) || state.drawnLines.length < 2) return;
+  const dateKey = (time) => { const date = new Date(Number(time) * 1000); return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`; };
+  ctx.save(); ctx.setLineDash([2, 4]); ctx.strokeStyle = "rgba(220,38,38,.62)"; ctx.lineWidth = 1;
+  for (let index = 1; index < state.drawnLines.length; index += 1) {
+    const previous = state.drawnLines[index - 1]; const current = state.drawnLines[index];
+    if (dateKey(previous.time) === dateKey(current.time)) continue;
+    const boundaryX = (previous.x + current.x) / 2; ctx.beginPath(); ctx.moveTo(boundaryX, pad.top); ctx.lineTo(boundaryX, bottom); ctx.stroke();
+  }
+  ctx.restore();
 }
 function drawChart(state) {
   const { canvas, rows, lines, macdValues, pnfColumns } = state;
@@ -175,7 +194,9 @@ function drawChart(state) {
   const { width, height, ratio } = resizeCanvas(canvas); const ctx = canvas.getContext("2d");
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
   const pad = { top: 106, right: 70, bottom: 30, left: 12 }; const chartW = Math.max(1, width - pad.left - pad.right); const chartH = Math.max(1, height - pad.top - pad.bottom);
-  const plotValues = state.chartType === "pnf" ? pnfColumns.flatMap((column) => column.levels) : lines.flatMap((line) => [line.open, line.close]);
+  let renkoRangeLines = lines;
+  if (state.chartType === "renko") { const visibleCount = 130; const maxOffset = Math.max(0, lines.length - visibleCount); state.viewOffset = Math.min(maxOffset, Math.max(0, state.viewOffset || 0)); const end = lines.length - state.viewOffset; renkoRangeLines = lines.slice(Math.max(0, end - visibleCount), end); }
+  const plotValues = state.chartType === "pnf" ? pnfColumns.flatMap((column) => column.levels) : (state.chartType === "renko" ? renkoRangeLines : lines).flatMap((line) => [line.open, line.close]);
   if (!plotValues.length) return;
   const min = Math.min(...plotValues); const max = Math.max(...plotValues); const spread = Math.max(max - min, Math.abs(max || 1) * .015); const low = min - spread * .09; const high = max + spread * .09;
   const y = (value) => pad.top + (high - value) / (high - low) * chartH; const xForRow = (index) => pad.left + index / Math.max(rows.length - 1, 1) * chartW;
@@ -205,10 +226,11 @@ function drawChart(state) {
     }));
   } else {
     const visibleCount = 130; const maxOffset = Math.max(0, lines.length - visibleCount); state.viewOffset = Math.min(maxOffset, Math.max(0, state.viewOffset || 0)); state.maxViewOffset = maxOffset;
-    const end = lines.length - state.viewOffset; const visibleLines = lines.slice(Math.max(0, end - visibleCount), end); const step = chartW / Math.max(visibleLines.length, 1); const brickWidth = Math.max(3, Math.min(18, step * .72));
+    const end = lines.length - state.viewOffset; const visibleLines = state.chartType === "renko" ? renkoRangeLines : lines.slice(Math.max(0, end - visibleCount), end); const step = chartW / Math.max(visibleLines.length, 1); const brickWidth = Math.max(3, Math.min(18, step * .72));
     state.drawnLines = visibleLines.map((line, index) => ({ ...line, x: pad.left + step * (index + .5), width: brickWidth, y1: y(line.open), y2: y(line.close) }));
     state.drawnLines.forEach((line) => { const top = Math.min(line.y1, line.y2); const brickHeight = Math.max(2, Math.abs(line.y2 - line.y1)); const rising = line.direction >= 0; ctx.fillStyle = rising ? "#ef5350" : "#1565c0"; ctx.fillRect(line.x - line.width / 2, top, line.width, brickHeight); ctx.strokeStyle = rising ? "#c62828" : "#0d47a1"; ctx.strokeRect(line.x - line.width / 2, top, line.width, brickHeight); });
   }
+  drawDateBoundaries(state, ctx, pad, height - pad.bottom);
   const timeline = state.drawnLines.length ? [state.drawnLines[0], state.drawnLines[Math.floor(state.drawnLines.length / 2)], state.drawnLines[state.drawnLines.length - 1]] : [rows[0], rows[Math.floor(rows.length / 2)], rows[rows.length - 1]];
   ctx.fillStyle = "#68758b"; ctx.font = "11px Inter, sans-serif"; ctx.textAlign = "left"; timeline.forEach((row, index) => ctx.fillText(timeText(row.time, state.interval).slice(2), pad.left + chartW * index / 2, height - 10));
   drawCrosshair(state, ctx);
@@ -216,7 +238,8 @@ function drawChart(state) {
 function showCrosshair(state, event) {
   const rect = state.canvas.getBoundingClientRect(); const x = event.clientX - rect.left; const pointerY = event.clientY - rect.top; const geometry = state.chartGeometry;
   if (!geometry || x < geometry.pad.left || x > geometry.width - geometry.pad.right || pointerY < geometry.pad.top || pointerY > geometry.height - geometry.pad.bottom) { state.crosshair = null; drawChart(state); return; }
-  state.crosshair = { x, y: pointerY }; drawChart(state);
+  const nearest = state.drawnLines.reduce((best, line) => !best || Math.abs(line.x - x) < Math.abs(best.x - x) ? line : best, null); if (!nearest) return;
+  state.crosshair = { x, y: pointerY, time: nearest.time }; drawChart(state);
 }
 async function fetchJson(path) { const response = await fetch(`${apiBase}${path}`, { cache: "no-store" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json(); }
 function providerLabel(source = "") {
