@@ -193,7 +193,7 @@ function drawChart(state) {
   if (!canvas || !rows?.length) return;
   const { width, height, ratio } = resizeCanvas(canvas); const ctx = canvas.getContext("2d");
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
-  const pad = { top: 106, right: 70, bottom: 30, left: 12 }; const chartW = Math.max(1, width - pad.left - pad.right); const chartH = Math.max(1, height - pad.top - pad.bottom);
+  const pad = { top: 94, right: 70, bottom: 30, left: 12 }; const chartW = Math.max(1, width - pad.left - pad.right); const chartH = Math.max(1, height - pad.top - pad.bottom);
   let renkoRangeLines = lines;
   if (state.chartType === "renko") { const visibleCount = 130; const maxOffset = Math.max(0, lines.length - visibleCount); state.viewOffset = Math.min(maxOffset, Math.max(0, state.viewOffset || 0)); const end = lines.length - state.viewOffset; renkoRangeLines = lines.slice(Math.max(0, end - visibleCount), end); }
   const plotValues = state.chartType === "pnf" ? pnfColumns.flatMap((column) => column.levels) : (state.chartType === "renko" ? renkoRangeLines : lines).flatMap((line) => [line.open, line.close]);
