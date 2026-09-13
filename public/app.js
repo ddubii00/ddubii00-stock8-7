@@ -1,342 +1,915 @@
 const INITIAL_CHARTS = [
-  { symbol: "000660.KS", name: "SK하이닉스" }, { symbol: "005930.KS", name: "삼성전자" },
-  { symbol: "AVGO.US", name: "Broadcom" }, { symbol: "SNDK.US", name: "Sandisk" }
+  { symbol: "000660.KS", name: "SK하이닉스", decimals: 0 },
+  { symbol: "005930.KS", name: "삼성전자", decimals: 0 },
+  { symbol: "AVGO.US", name: "Broadcom", decimals: 2 },
+  { symbol: "SNDK.US", name: "Sandisk", decimals: 2 }
 ];
-const TIMEFRAMES = [["1분", "1m"], ["3분", "3m"], ["5분", "5m"], ["10분", "10m"], ["15분", "15m"], ["30분", "30m"], ["1시간", "60m"], ["일", "1d"], ["주", "1wk"], ["월", "1mo"]];
-const CHART_TYPES = [["삼선전환도", "three-line"], ["Renko", "renko"], ["P&F", "pnf"]];
-const MARKET_ITEMS = [{ label: "달러/원", symbol: "KRW=X", decimals: 2 }, { label: "KOSPI", symbol: "^KS11", decimals: 2 }, { label: "KOSDAQ", symbol: "^KQ11", decimals: 2 }, { label: "나스닥", symbol: "^IXIC", decimals: 2 }];
-// Naver's 3-minute view covers roughly five trading days. Keep the same usable
-// range by default; users can still lower or raise it with 조회기간.
-const DEFAULT_LIMIT_BY_INTERVAL = { "1m": 700, "3m": 700, "5m": 500, "10m": 300, "15m": 240, "30m": 180, "60m": 150, "1d": 120, "1wk": 120, "1mo": 120 };
-const STORAGE_KEY = "stock12.threeLineBreak.charts.v1";
-const SESSION_MODE_KEY = "stock12.threeLineBreak.session.v1";
-const REFRESH_MS = 30_000;
+
+const TIMEFRAMES = [
+  { label: "1분", value: "1m" },
+  { label: "3분", value: "3m" },
+  { label: "5분", value: "5m" },
+  { label: "10분", value: "10m" },
+  { label: "15분", value: "15m" },
+  { label: "30분", value: "30m" },
+  { label: "1시간", value: "60m" },
+  { label: "일", value: "1d" },
+  { label: "주", value: "1wk" },
+  { label: "월", value: "1mo" }
+];
+
+const MARKET_ITEMS = [
+  { label: "달러/원", symbol: "KRW=X", decimals: 2 },
+  { label: "KOSPI", symbol: "^KS11", decimals: 2 },
+  { label: "KOSDAQ", symbol: "^KQ11", decimals: 2 },
+  { label: "나스닥", symbol: "^IXIC", decimals: 2 }
+];
+
+const DEFAULT_INTERVAL = "1d";
+const DEFAULT_LIMIT = 120;
+const MAX_LIMIT = 700;
+const DEFAULT_LIMIT_BY_INTERVAL = {
+  "1m": 400,
+  "3m": 150,
+  "5m": 120,
+  "10m": 100,
+  "15m": 100,
+  "30m": 100,
+  "60m": 100,
+  "1d": 120,
+  "1wk": 120,
+  "1mo": 120
+};
+const STORAGE_KEY = "stock8.selectedCharts.v2";
+const SESSION_MODE_KEY = "stock8.sessionMode.v1";
+const MA_PERIODS = [5, 10, 20, 60, 120, 240];
+const WARMUP_BARS = Math.max(...MA_PERIODS);
+const CHART_PRICE_DECIMALS = 0;
+const UPDATE_INTERVAL_MS = 1_000;
+const CHART_RIGHT_OFFSET = 2;
+const CHART_BAR_SPACING = 6;
+const PRICE_SCALE_WIDTH = 82;
+const FETCH_LIMIT = 700;
+const NTX_VISIBLE_LIMIT = 620;
+const INTERVAL_SECONDS = {
+  "1m": 60,
+  "3m": 180,
+  "5m": 300,
+  "10m": 600,
+  "15m": 900,
+  "30m": 1800,
+  "60m": 3600
+};
+const MA_COLORS = {
+  5: "#d92c2c",
+  10: "#1f5bd8",
+  20: "#0a9d58",
+  60: "#e4a11b",
+  120: "#8040a0",
+  240: "#606060"
+};
+
 const chartGrid = document.querySelector("#chartGrid");
 const marketSummary = document.querySelector("#marketSummary");
-const sourceIndicator = document.querySelector("#sourceIndicator");
+const sessionButtons = document.querySelectorAll(".session-button");
 const template = document.querySelector("#chart-card-template");
 const chartState = new Map();
-const apiBase = location.pathname === "/stock12" || location.pathname.startsWith("/stock12/") ? "/stock12/api" : "/api";
-let sessionMode = localStorage.getItem(SESSION_MODE_KEY) || "KRX";
+let marketRefreshInFlight = false;
+let chartRefreshInFlight = false;
+let sessionMode = "KRX";
 
 function formatNumber(value, decimals = 2) {
   const number = Number(value);
-  return Number.isFinite(number) ? number.toLocaleString("ko-KR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) : "--";
+  if (!Number.isFinite(number)) return "--";
+  return number.toLocaleString("ko-KR", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  });
 }
-function isKorean(symbol) { return symbol.endsWith(".KS") || symbol.endsWith(".KQ"); }
-function isIntraday(interval) { return !["1d", "1wk", "1mo"].includes(interval); }
-function decimalsFor(symbol) { return isKorean(symbol) ? 0 : 2; }
-function tickerFor(symbol) { return String(symbol || "").replace(/\.(KS|KQ|US)$/i, ""); }
-function defaultLimit(interval) { return DEFAULT_LIMIT_BY_INTERVAL[interval] || 120; }
-function timeText(time, interval) {
-  const date = new Date(time * 1000);
-  const dateText = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  return ["1d", "1wk", "1mo"].includes(interval) ? dateText : `${dateText} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+
+function formatChange(value, decimals = 2) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `${number > 0 ? "+" : ""}${number.toFixed(decimals)}%`;
 }
+
+function isKoreanSymbol(symbol) {
+  return symbol?.endsWith(".KS") || symbol?.endsWith(".KQ");
+}
+
+function isKoreanIndex(symbol) {
+  return symbol === "^KS11" || symbol === "^KQ11";
+}
+
+function priceDecimalsForSymbol(symbol) {
+  if (symbol?.startsWith("^") || symbol === "KRW=X" || symbol?.endsWith(".US")) {
+    return 2;
+  }
+  return CHART_PRICE_DECIMALS;
+}
+
+function priceFormatForSymbol(symbol) {
+  const precision = priceDecimalsForSymbol(symbol);
+  return { type: "price", precision, minMove: precision === 2 ? 0.01 : 1 };
+}
+
 function loadSavedCharts() {
-  try { const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); if (Array.isArray(saved) && saved.length === INITIAL_CHARTS.length) return saved; } catch { /* optional */ }
-  return INITIAL_CHARTS;
-}
-function saveCharts() { localStorage.setItem(STORAGE_KEY, JSON.stringify([...chartState.values()].map((state) => state.item))); }
-function ema(values, period) {
-  const weight = 2 / (period + 1); let previous = values[0] || 0;
-  return values.map((value) => (previous = value * weight + previous * (1 - weight)));
-}
-function macd(rows) { const closes = rows.map((row) => Number(row.close)); const fast = ema(closes, 12); const slow = ema(closes, 26); return fast.map((value, index) => value - slow[index]); }
-
-// Standard three-line-break construction (the same convention used by Naver):
-// continuation follows the prior line's close; a reversal needs a close beyond
-// the high/low of the previous three completed lines. Input is closing prices.
-function threeLineBreak(rows) {
-  if (!rows.length) return [];
-  const firstClose = Number(rows[0].close); let firstIndex = 1;
-  while (firstIndex < rows.length && Number(rows[firstIndex].close) === firstClose) firstIndex += 1;
-  if (firstIndex >= rows.length) return [{ open: firstClose, close: firstClose, high: firstClose, low: firstClose, time: rows[0].time, direction: 0 }];
-  const nextClose = Number(rows[firstIndex].close);
-  const lines = [{ open: firstClose, close: nextClose, high: Math.max(firstClose, nextClose), low: Math.min(firstClose, nextClose), time: rows[firstIndex].time, direction: nextClose > firstClose ? 1 : -1 }];
-  for (const row of rows.slice(firstIndex + 1)) {
-    const close = Number(row.close);
-    const last = lines[lines.length - 1];
-    const recent = lines.slice(-3);
-    const reversalHigh = Math.max(...recent.map((line) => line.high));
-    const reversalLow = Math.min(...recent.map((line) => line.low));
-    const risingContinuation = (last.direction >= 0 && close > last.close);
-    const fallingContinuation = (last.direction <= 0 && close < last.close);
-    const risingReversal = last.direction < 0 && close > reversalHigh;
-    const fallingReversal = last.direction > 0 && close < reversalLow;
-    if (!risingContinuation && !fallingContinuation && !risingReversal && !fallingReversal) continue;
-    const direction = risingContinuation || risingReversal ? 1 : -1;
-    lines.push({ open: last.close, close, high: Math.max(last.close, close), low: Math.min(last.close, close), time: row.time, direction });
-  }
-  return lines;
-}
-function tickSize(price, symbol) {
-  if (!isKorean(symbol)) return price >= 10 ? .1 : .01;
-  if (price < 2_000) return 1;
-  if (price < 5_000) return 5;
-  if (price < 20_000) return 10;
-  if (price < 50_000) return 50;
-  if (price < 200_000) return 100;
-  if (price < 500_000) return 500;
-  return 1_000;
-}
-function roundToTick(value, tick) { return Math.max(tick, Math.round(value / tick) * tick); }
-function chartBoxSize(rows, symbol) {
-  const price = Math.abs(Number(rows.at(-1)?.close || 1)); const tick = tickSize(price, symbol); const target = Math.max(tick, price * .0025);
-  const power = 10 ** Math.floor(Math.log10(target)); const normalized = target / power;
-  const nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
-  return roundToTick(nice * power, tick);
-}
-function renko(rows, symbol) {
-  if (!rows.length) return [];
-  const box = chartBoxSize(rows, symbol); const first = Number(rows[0].close);
-  const bricks = []; let close = Math.round(first / box) * box; let direction = 0;
-  for (const row of rows.slice(1)) {
-    const value = Number(row.close);
-    const add = (next, nextDirection) => { bricks.push({ open: close, close: next, high: Math.max(close, next), low: Math.min(close, next), time: row.time, direction: nextDirection }); close = next; direction = nextDirection; };
-    if (direction >= 0 && value >= close + box) while (value >= close + box) add(close + box, 1);
-    else if (direction <= 0 && value <= close - box) while (value <= close - box) add(close - box, -1);
-    else if (direction > 0 && value <= close - box * 2) { add(close - box, -1); while (value <= close - box) add(close - box, -1); }
-    else if (direction < 0 && value >= close + box * 2) { add(close + box, 1); while (value >= close + box) add(close + box, 1); }
-  }
-  return bricks.length ? bricks : [{ open: close, close, high: close, low: close, time: rows[0].time, direction: 0 }];
-}
-function pointAndFigure(rows, symbol) {
-  if (!rows.length) return [];
-  const box = chartBoxSize(rows, symbol); let level = Math.round(Number(rows[0].close) / box) * box; let direction = 0; const columns = [];
-  const makeColumn = (nextDirection, time) => { const column = { direction: nextDirection, time, levels: [] }; columns.push(column); direction = nextDirection; return column; };
-  for (const row of rows.slice(1)) {
-    const high = Number(row.high ?? row.close); const low = Number(row.low ?? row.close); const close = Number(row.close); let column = columns.at(-1);
-    if (!direction) {
-      const upBoxes = Math.floor((high - level) / box); const downBoxes = Math.floor((level - low) / box);
-      if (upBoxes > 0 && (upBoxes > downBoxes || (upBoxes === downBoxes && close >= Number(row.open)))) { column = makeColumn(1, row.time); while (high >= level + box) { level += box; column.levels.push(level); } }
-      else if (downBoxes > 0) { column = makeColumn(-1, row.time); while (low <= level - box) { level -= box; column.levels.push(level); } }
-    } else if (direction > 0) {
-      if (high >= level + box) { while (high >= level + box) { level += box; column.levels.push(level); } column.time = row.time; }
-      else if (low <= level - box * 3) { column = makeColumn(-1, row.time); while (low <= level - box) { level -= box; column.levels.push(level); } }
-    } else if (low <= level - box) { while (low <= level - box) { level -= box; column.levels.push(level); } column.time = row.time; }
-    else if (high >= level + box * 3) { column = makeColumn(1, row.time); while (high >= level + box) { level += box; column.levels.push(level); } }
-  }
-  const result = columns.length ? columns : [{ direction: 1, time: rows[0].time, levels: [level] }];
-  result.boxSize = box; return result;
-}
-function updateChartGeometry(state) {
-  state.threeLines = threeLineBreak(state.rows);
-  state.lines = state.chartType === "renko" ? renko(state.rows, state.item.symbol) : state.threeLines;
-  state.pnfColumns = state.chartType === "pnf" ? pointAndFigure(state.rows, state.item.symbol) : [];
-  state.boxSize = state.chartType === "pnf" ? state.pnfColumns.boxSize : state.chartType === "renko" ? chartBoxSize(state.rows, state.item.symbol) : null;
-}
-function resizeCanvas(canvas) {
-  const rect = canvas.getBoundingClientRect(); const ratio = window.devicePixelRatio || 1;
-  const width = Math.max(1, Math.round(rect.width * ratio)); const height = Math.max(1, Math.round(rect.height * ratio));
-  if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
-  return { width: rect.width, height: rect.height, ratio };
-}
-function drawLegacyChart(state) {
-  const { canvas, rows, lines, macdValues } = state; if (!canvas || !rows?.length || !lines?.length) return;
-  const { width, height, ratio } = resizeCanvas(canvas); const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
-  // Reserve a header lane for the symbol and current price on narrow cards.
-  const pad = { top: 88, right: 70, bottom: 30, left: 12 }; const chartW = Math.max(1, width - pad.left - pad.right); const chartH = Math.max(1, height - pad.top - pad.bottom);
-  const values = lines.flatMap((line) => [line.open, line.close]); const min = Math.min(...values); const max = Math.max(...values); const spread = Math.max(max - min, Math.abs(max || 1) * .015); const low = min - spread * .09; const high = max + spread * .09;
-  const y = (value) => pad.top + (high - value) / (high - low) * chartH; const xForRow = (index) => pad.left + index / Math.max(rows.length - 1, 1) * chartW;
-  // MACD background is a flat color by sign, never a magnitude gradient.
-  let regionStart = 0;
-  let sign = (macdValues[0] || 0) >= 0 ? 1 : -1;
-  for (let index = 1; index <= rows.length; index += 1) {
-    const nextSign = index < rows.length && (macdValues[index] || 0) >= 0 ? 1 : -1;
-    if (index < rows.length && nextSign === sign) continue;
-    const left = xForRow(regionStart);
-    const right = index >= rows.length ? pad.left + chartW : xForRow(index);
-    ctx.fillStyle = sign > 0 ? "rgba(239,83,80,.09)" : "rgba(21,101,192,.09)";
-    ctx.fillRect(left, pad.top, Math.max(1, right - left), chartH);
-    regionStart = index; sign = nextSign;
-  }
-  ctx.strokeStyle = "rgba(111,132,161,.2)"; ctx.lineWidth = 1; ctx.font = "11px Inter, sans-serif"; ctx.textAlign = "left";
-  for (let row = 0; row <= 4; row += 1) { const lineY = pad.top + chartH * row / 4; ctx.beginPath(); ctx.moveTo(pad.left, lineY); ctx.lineTo(pad.left + chartW, lineY); ctx.stroke(); ctx.fillStyle = "#68758b"; ctx.fillText(formatNumber(high - (high - low) * row / 4, decimalsFor(state.item.symbol)), pad.left + chartW + 8, lineY + 4); }
-  const visibleLines = lines.slice(-Math.min(lines.length, 130)); const step = chartW / Math.max(visibleLines.length, 1); const brickWidth = Math.max(3, Math.min(18, step * .72));
-  state.drawnLines = visibleLines.map((line, index) => ({ ...line, x: pad.left + step * (index + .5), width: brickWidth, y1: y(line.open), y2: y(line.close) }));
-  state.drawnLines.forEach((line) => { const top = Math.min(line.y1, line.y2); const brickHeight = Math.max(2, Math.abs(line.y2 - line.y1)); const rising = line.direction >= 0; ctx.fillStyle = rising ? "#ef5350" : "#1565c0"; ctx.fillRect(line.x - line.width / 2, top, line.width, brickHeight); ctx.strokeStyle = rising ? "#c62828" : "#0d47a1"; ctx.strokeRect(line.x - line.width / 2, top, line.width, brickHeight); });
-  ctx.fillStyle = "#68758b"; const labels = [rows[0], rows[Math.floor(rows.length / 2)], rows[rows.length - 1]]; labels.forEach((row, index) => ctx.fillText(timeText(row.time, state.interval).slice(2), pad.left + chartW * index / 2, height - 10));
-}
-function drawCrosshair(state, ctx) {
-  const crosshair = state.crosshair; const geometry = state.chartGeometry;
-  if (!crosshair || !geometry) return;
-  const { pad, width, height, chartH, low, high } = geometry;
-  const right = width - pad.right; const bottom = height - pad.bottom;
-  const x = Math.min(right, Math.max(pad.left, crosshair.x)); const lineY = Math.min(bottom, Math.max(pad.top, crosshair.y));
-  ctx.save(); ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.strokeStyle = "rgba(48,67,95,.72)";
-  ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, bottom); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(pad.left, lineY); ctx.lineTo(right, lineY); ctx.stroke(); ctx.setLineDash([]);
-
-  const price = high - (lineY - pad.top) / chartH * (high - low); const priceText = formatNumber(price, decimalsFor(state.item.symbol));
-  const fullTime = timeText(crosshair.time, state.interval); const timeLabel = isIntraday(state.interval) ? fullTime.slice(11) : fullTime;
-  ctx.font = "700 9px Inter, sans-serif"; ctx.textAlign = "left";
-  const priceWidth = Math.ceil(ctx.measureText(priceText).width) + 7; const priceX = right + 2; const priceY = Math.min(bottom - 14, Math.max(pad.top, lineY - 7));
-  ctx.fillStyle = "rgba(49,73,109,.88)"; ctx.fillRect(priceX, priceY, Math.min(priceWidth, width - priceX - 1), 14); ctx.fillStyle = "#fff"; ctx.fillText(priceText, priceX + 3, priceY + 10);
-  const timeWidth = Math.ceil(ctx.measureText(timeLabel).width) + 7; const timeX = Math.min(right - timeWidth, Math.max(pad.left, x - timeWidth / 2)); const timeY = bottom + 5;
-  ctx.fillStyle = "rgba(49,73,109,.88)"; ctx.fillRect(timeX, timeY, timeWidth, 14); ctx.fillStyle = "#fff"; ctx.fillText(timeLabel, timeX + 3, timeY + 10); ctx.restore();
-}
-function drawDateBoundaries(state, ctx, pad, bottom) {
-  if (!isIntraday(state.interval) || state.drawnLines.length < 2) return;
-  const dateKey = (time) => { const date = new Date(Number(time) * 1000); return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`; };
-  ctx.save(); ctx.setLineDash([2, 4]); ctx.strokeStyle = "rgba(220,38,38,.62)"; ctx.lineWidth = 1;
-  for (let index = 1; index < state.drawnLines.length; index += 1) {
-    const previous = state.drawnLines[index - 1]; const current = state.drawnLines[index];
-    if (dateKey(previous.time) === dateKey(current.time)) continue;
-    const boundaryX = (previous.x + current.x) / 2; ctx.beginPath(); ctx.moveTo(boundaryX, pad.top); ctx.lineTo(boundaryX, bottom); ctx.stroke();
-  }
-  ctx.restore();
-}
-function drawChart(state) {
-  const { canvas, rows, lines, macdValues, pnfColumns } = state;
-  if (!canvas || !rows?.length) return;
-  const { width, height, ratio } = resizeCanvas(canvas); const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
-  const pad = { top: 94, right: 70, bottom: 30, left: 12 }; const chartW = Math.max(1, width - pad.left - pad.right); const chartH = Math.max(1, height - pad.top - pad.bottom);
-  let renkoRangeLines = lines;
-  if (state.chartType === "renko") { const visibleCount = 130; const maxOffset = Math.max(0, lines.length - visibleCount); state.viewOffset = Math.min(maxOffset, Math.max(0, state.viewOffset || 0)); const end = lines.length - state.viewOffset; renkoRangeLines = lines.slice(Math.max(0, end - visibleCount), end); }
-  const plotValues = state.chartType === "pnf" ? pnfColumns.flatMap((column) => column.levels) : (state.chartType === "renko" ? renkoRangeLines : lines).flatMap((line) => [line.open, line.close]);
-  if (!plotValues.length) return;
-  const min = Math.min(...plotValues); const max = Math.max(...plotValues); const spread = Math.max(max - min, Math.abs(max || 1) * .015); const low = min - spread * .09; const high = max + spread * .09;
-  const y = (value) => pad.top + (high - value) / (high - low) * chartH; const xForRow = (index) => pad.left + index / Math.max(rows.length - 1, 1) * chartW;
-  state.chartGeometry = { pad, width, height, chartH, low, high };
-
-  // Keep the MACD background flat, and extend it under the timeframe/type controls.
-  let regionStart = 0; let sign = (macdValues[0] || 0) >= 0 ? 1 : -1;
-  for (let index = 1; index <= rows.length; index += 1) {
-    const nextSign = index < rows.length && (macdValues[index] || 0) >= 0 ? 1 : -1;
-    if (index < rows.length && nextSign === sign) continue;
-    const left = xForRow(regionStart); const right = index >= rows.length ? width : xForRow(index);
-    ctx.fillStyle = sign > 0 ? "rgba(239,83,80,.09)" : "rgba(21,101,192,.09)";
-    ctx.fillRect(left, 0, Math.max(1, right - left), height - pad.bottom);
-    regionStart = index; sign = nextSign;
-  }
-  ctx.strokeStyle = "rgba(111,132,161,.2)"; ctx.lineWidth = 1; ctx.font = "11px Inter, sans-serif"; ctx.textAlign = "left";
-  for (let row = 0; row <= 4; row += 1) { const lineY = pad.top + chartH * row / 4; ctx.beginPath(); ctx.moveTo(pad.left, lineY); ctx.lineTo(pad.left + chartW, lineY); ctx.stroke(); ctx.fillStyle = "#68758b"; ctx.fillText(formatNumber(high - (high - low) * row / 4, decimalsFor(state.item.symbol)), pad.left + chartW + 8, lineY + 4); }
-
-  if (state.chartType === "pnf") {
-    const visibleCount = 80; const maxOffset = Math.max(0, pnfColumns.length - visibleCount); state.viewOffset = Math.min(maxOffset, Math.max(0, state.viewOffset || 0)); state.maxViewOffset = maxOffset;
-    const end = pnfColumns.length - state.viewOffset; const columns = pnfColumns.slice(Math.max(0, end - visibleCount), end); const step = chartW / Math.max(columns.length, 1); const boxPixels = Math.abs(y(low + (state.boxSize || 1)) - y(low)); const glyph = Math.max(4, Math.min(10, step * .42, boxPixels * .78)); state.drawnLines = [];
-    columns.forEach((column, index) => column.levels.forEach((level) => {
-      const x = pad.left + step * (index + .5); const lineY = y(level); const half = glyph / 2; ctx.strokeStyle = column.direction > 0 ? "#e54848" : "#4169d8"; ctx.lineWidth = Math.max(1, glyph * .15); ctx.beginPath();
-      if (column.direction > 0) { ctx.moveTo(x - half, lineY - half); ctx.lineTo(x + half, lineY + half); ctx.moveTo(x + half, lineY - half); ctx.lineTo(x - half, lineY + half); }
-      else ctx.ellipse(x, lineY, half, half * .78, 0, 0, Math.PI * 2);
-      ctx.stroke(); state.drawnLines.push({ open: level, close: level, time: column.time, direction: column.direction, x, width: step, y1: lineY, y2: lineY });
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    if (!Array.isArray(parsed) || parsed.length !== INITIAL_CHARTS.length) return INITIAL_CHARTS;
+    return parsed.map((item, index) => ({
+      symbol: String(item.symbol || INITIAL_CHARTS[index].symbol).toUpperCase(),
+      name: String(item.name || INITIAL_CHARTS[index].name),
+      decimals: Number.isFinite(Number(item.decimals)) ? Number(item.decimals) : INITIAL_CHARTS[index].decimals
     }));
-  } else {
-    const visibleCount = 130; const maxOffset = Math.max(0, lines.length - visibleCount); state.viewOffset = Math.min(maxOffset, Math.max(0, state.viewOffset || 0)); state.maxViewOffset = maxOffset;
-    const end = lines.length - state.viewOffset; const visibleLines = state.chartType === "renko" ? renkoRangeLines : lines.slice(Math.max(0, end - visibleCount), end); const step = chartW / Math.max(visibleLines.length, 1); const brickWidth = Math.max(3, Math.min(18, step * .72));
-    state.drawnLines = visibleLines.map((line, index) => ({ ...line, x: pad.left + step * (index + .5), width: brickWidth, y1: y(line.open), y2: y(line.close) }));
-    state.drawnLines.forEach((line) => { const top = Math.min(line.y1, line.y2); const brickHeight = Math.max(2, Math.abs(line.y2 - line.y1)); const rising = line.direction >= 0; ctx.fillStyle = rising ? "#ef5350" : "#1565c0"; ctx.fillRect(line.x - line.width / 2, top, line.width, brickHeight); ctx.strokeStyle = rising ? "#c62828" : "#0d47a1"; ctx.strokeRect(line.x - line.width / 2, top, line.width, brickHeight); });
+  } catch {
+    return INITIAL_CHARTS;
   }
-  drawDateBoundaries(state, ctx, pad, height - pad.bottom);
-  const timeline = state.drawnLines.length ? [state.drawnLines[0], state.drawnLines[Math.floor(state.drawnLines.length / 2)], state.drawnLines[state.drawnLines.length - 1]] : [rows[0], rows[Math.floor(rows.length / 2)], rows[rows.length - 1]];
-  ctx.fillStyle = "#68758b"; ctx.font = "11px Inter, sans-serif"; ctx.textAlign = "left"; timeline.forEach((row, index) => ctx.fillText(timeText(row.time, state.interval).slice(2), pad.left + chartW * index / 2, height - 10));
-  drawCrosshair(state, ctx);
 }
-function showCrosshair(state, event) {
-  const rect = state.canvas.getBoundingClientRect(); const x = event.clientX - rect.left; const pointerY = event.clientY - rect.top; const geometry = state.chartGeometry;
-  if (!geometry || x < geometry.pad.left || x > geometry.width - geometry.pad.right || pointerY < geometry.pad.top || pointerY > geometry.height - geometry.pad.bottom) { state.crosshair = null; drawChart(state); return; }
-  const nearest = state.drawnLines.reduce((best, line) => !best || Math.abs(line.x - x) < Math.abs(best.x - x) ? line : best, null); if (!nearest) return;
-  state.crosshair = { x, y: pointerY, time: nearest.time }; drawChart(state);
-}
-async function fetchJson(path) { const response = await fetch(`${apiBase}${path}`, { cache: "no-store" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json(); }
-function providerLabel(source = "") {
-  if (/^kis/i.test(source)) return "KIS";
-  if (/naver/i.test(source)) return "네이버";
-  if (/yahoo/i.test(source)) return "Yahoo";
-  return source ? "대체 시세" : "확인 중";
-}
-function updateSourceIndicator(payload) {
-  if (!sourceIndicator) return;
-  const label = providerLabel(payload?.source); sourceIndicator.querySelector("span").textContent = label; sourceIndicator.className = `source-indicator ${payload?.source ? "live" : ""}`; sourceIndicator.title = `${label} 시세 연결됨`;
-}
-function updateQuote(state, payload) {
-  const latest = payload.series?.[payload.series.length - 1]; const price = Number(payload.price || latest?.close); const change = Number(payload.changePercent ?? payload.changeRate ?? ((price / Number(payload.previousClose) - 1) * 100)); const up = change >= 0;
-  const priceEl = state.card.querySelector(".last-price"); priceEl.textContent = formatNumber(price, payload.decimals ?? decimalsFor(state.item.symbol)); priceEl.className = `last-price ${up ? "up" : "down"}`; const changeEl = state.card.querySelector(".last-change"); changeEl.textContent = Number.isFinite(change) ? `${up ? "+" : ""}${change.toFixed(2)}%` : "--"; changeEl.className = `last-change ${up ? "up" : "down"}`;
-  state.card.querySelector(".market-status").textContent = "";
-  if (isKorean(state.item.symbol)) updateSourceIndicator(payload);
-}
-function showSignalAlert(state, kind, time) {
-  const alert = state.alert;
-  const rising = kind === "turn-up";
-  const twoLines = kind === "two-lines";
-  alert.className = `signal-alert visible ${twoLines ? "two-lines" : rising ? "turn-up" : "turn-down"}`;
-  alert.querySelector(".signal-alert-title").textContent = twoLines ? "삼선전환도 2봉 확인" : rising ? "MACD 빨강 전환" : "MACD 파랑 전환";
-  alert.querySelector(".signal-alert-message").textContent = twoLines
-    ? `${timeText(time, state.interval)} · 색 전환 뒤 삼선전환도 봉 2개가 생성되었습니다.`
-    : `${timeText(time, state.interval)} · MACD 배경이 ${rising ? "파랑에서 빨강" : "빨강에서 파랑"}으로 전환되었습니다.`;
-}
-function evaluateSignals(state) {
-  if (!isIntraday(state.interval) || !state.rows.length) { state.previousMacdSign = null; return; }
-  const sign = (state.macdValues[state.macdValues.length - 1] || 0) >= 0 ? 1 : -1;
-  const lastTime = state.rows[state.rows.length - 1].time;
-  const lineCount = state.threeLines.length;
-  if (state.previousMacdSign == null) { state.previousMacdSign = sign; return; }
-  if (sign !== state.previousMacdSign) {
-    showSignalAlert(state, sign > 0 ? "turn-up" : "turn-down", lastTime);
-    state.pendingTwoLineAlert = { sign, baselineLineCount: lineCount };
-  } else if (state.pendingTwoLineAlert?.sign === sign && lineCount >= state.pendingTwoLineAlert.baselineLineCount + 2) {
-    showSignalAlert(state, "two-lines", lastTime);
-    state.pendingTwoLineAlert = null;
+
+function saveCharts() {
+  const items = [...chartState.values()].map((state) => state.item);
+  if (items.length === INITIAL_CHARTS.length) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
   }
-  state.previousMacdSign = sign;
 }
-async function refreshChart(state, showLoading = false) {
-  if (state.loading) return; state.loading = true; if (showLoading) state.loadingEl.classList.add("visible");
-  try { const calculationLimit = isIntraday(state.interval) ? Math.min(3500, state.limit * 5) : state.limit; const params = new URLSearchParams({ symbol: state.item.symbol, name: state.item.name, interval: state.interval, limit: String(calculationLimit), mode: sessionMode }); const payload = await fetchJson(`/chart?${params}`); const rows = (payload.series || []).filter((row) => Number.isFinite(Number(row.close))); if (!rows.length) throw new Error("empty series"); state.rows = rows; state.calculationLimit = calculationLimit; state.macdValues = macd(rows); state.crosshair = null; updateChartGeometry(state); drawChart(state); updateQuote(state, payload); evaluateSignals(state); state.card.classList.remove("error"); }
-  catch (error) { state.card.classList.add("error"); state.card.querySelector(".market-status").textContent = "데이터 재시도 중"; console.warn("Chart refresh failed", error); }
-  finally { state.loading = false; state.loadingEl.classList.remove("visible"); }
+
+function updateSessionButtons() {
+  sessionButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.mode === sessionMode);
+  });
 }
-function applyLiveQuote(state, payload) {
-  if (!isIntraday(state.interval) || !state.rows.length) return;
-  const seconds = { "1m": 60, "3m": 180, "5m": 300, "10m": 600, "15m": 900, "30m": 1800, "60m": 3600 }[state.interval] || 60;
-  const price = Number(payload.price); const quoteTime = Number(payload.marketTime || payload.asOf); if (!Number.isFinite(price) || !Number.isFinite(quoteTime)) return;
-  const bucketTime = Math.floor(quoteTime / seconds) * seconds; const rows = state.rows.slice(); const last = rows.at(-1); if (bucketTime < Number(last.time)) return;
-  if (bucketTime === Number(last.time)) rows[rows.length - 1] = { ...last, high: Math.max(Number(last.high), price), low: Math.min(Number(last.low), price), close: price };
-  else rows.push({ time: bucketTime, open: Number(last.close), high: Math.max(Number(last.close), price), low: Math.min(Number(last.close), price), close: price, volume: 0 });
-  state.rows = rows.slice(-(state.calculationLimit || state.limit)); state.macdValues = macd(state.rows); updateChartGeometry(state); drawChart(state); evaluateSignals(state);
+
+function formatAxisPrice(value, symbol) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  if (isKoreanSymbol(symbol) && Math.abs(number) >= 1_000) {
+    return `${formatNumber(Math.round(number / 1_000), 0)}k`;
+  }
+  return formatNumber(number, priceDecimalsForSymbol(symbol));
 }
-async function refreshLiveQuote(state) {
-  if (state.loading) return;
-  try { const payload = await fetchJson(`/quote?symbol=${encodeURIComponent(state.item.symbol)}&mode=${sessionMode}`); updateQuote(state, payload); applyLiveQuote(state, payload); }
-  catch { /* the full chart refresh remains the fallback */ }
+
+function isSymbolEditing(state) {
+  const input = state.card.querySelector(".symbol-input");
+  return state.isEditingSymbol || document.activeElement === input;
 }
-function renderTimeframes(state) {
-  const holder = state.card.querySelector(".timeframe-buttons"); holder.replaceChildren(...TIMEFRAMES.map(([label, value]) => { const button = document.createElement("button"); button.type = "button"; button.className = `tf-button ${state.interval === value ? "active" : ""}`; button.textContent = label; button.addEventListener("click", () => { state.interval = value; state.limit = defaultLimit(value); state.viewOffset = 0; state.previousMacdSign = null; state.pendingTwoLineAlert = null; state.card.querySelector(".period-input").value = state.limit; renderTimeframes(state); refreshChart(state, true); }); return button; }));
+
+function formatTooltipTime(interval, time) {
+  const date = new Date(time * 1000);
+  const datePart = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  if (!isIntraday(interval)) return datePart;
+  return `${datePart} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
-function renderChartTypes(state) {
-  const holder = state.card.querySelector(".chart-type-buttons");
-  holder.replaceChildren(...CHART_TYPES.map(([label, value]) => {
-    const button = document.createElement("button"); button.type = "button"; button.className = `chart-type-button ${state.chartType === value ? "active" : ""}`; button.textContent = label;
-    button.addEventListener("click", () => { state.chartType = value; state.viewOffset = 0; updateChartGeometry(state); state.card.querySelector(".chart-note").firstChild.textContent = `${label} · MACD 양수 `; state.canvas.setAttribute("aria-label", label); renderChartTypes(state); drawChart(state); });
-    return button;
+
+function isIntraday(interval) {
+  return !["1d", "1wk", "1mo"].includes(interval);
+}
+
+function minimumLimitForInterval(interval) {
+  return 20;
+}
+
+function defaultLimitForInterval(interval) {
+  return DEFAULT_LIMIT_BY_INTERVAL[interval] || DEFAULT_LIMIT;
+}
+
+function tickFormatter(interval, time) {
+  const date = new Date(time * 1000);
+  if (!isIntraday(interval)) {
+    return `${String(date.getFullYear()).slice(2)}.${String(date.getMonth() + 1).padStart(2, "0")}`;
+  }
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function calcSma(rows, period) {
+  const result = [];
+  for (let i = 0; i < rows.length; i += 1) {
+    if (i < period - 1) continue;
+    let sum = 0;
+    for (let j = 0; j < period; j += 1) sum += rows[i - j].close;
+    result.push({ time: rows[i].time, value: sum / period });
+  }
+  return result;
+}
+
+function calcVisibleSma(state, period) {
+  const visibleTimes = new Set((state.rows || []).map((row) => row.time));
+  return calcSma(state.sourceRows || state.rows || [], period).filter((row) => visibleTimes.has(row.time));
+}
+
+function ema(values, period) {
+  const out = [];
+  const k = 2 / (period + 1);
+  let current = values[0];
+  for (const value of values) {
+    current = current == null ? value : value * k + current * (1 - k);
+    out.push(current);
+  }
+  return out;
+}
+
+function calcMacd(rows) {
+  const closes = rows.map((row) => row.close);
+  const ema12 = ema(closes, 12);
+  const ema26 = ema(closes, 26);
+  return rows.map((row, index) => ({
+    time: row.time,
+    value: ema12[index] - ema26[index]
   }));
 }
-async function suggestSymbols(state, query) {
-  const box = state.card.querySelector(".suggestions"); if (query.trim().length < 1) { box.replaceChildren(); return; }
-  try { const payload = await fetchJson(`/search?q=${encodeURIComponent(query)}`); box.replaceChildren(...(payload.results || []).slice(0, 8).map((item) => { const button = document.createElement("button"); button.type = "button"; button.innerHTML = `<b>${item.name}</b><small>${item.symbol}</small>`; button.addEventListener("mousedown", (event) => { event.preventDefault(); state.item = { symbol: item.symbol, name: item.name }; state.card.querySelector(".symbol-input").value = item.name; state.card.querySelector(".symbol-code").textContent = `티커 ${tickerFor(item.symbol)}`; box.replaceChildren(); saveCharts(); refreshChart(state, true); }); return button; })); } catch { box.replaceChildren(); }
+
+function createLwChart(container, state) {
+  const priceFormat = priceFormatForSymbol(state.item.symbol);
+  const chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: container.clientHeight,
+    layout: {
+      backgroundColor: "transparent",
+      textColor: "#172033",
+      fontFamily: "Inter, Pretendard, sans-serif"
+    },
+    localization: {
+      timeFormatter: (time) => tickFormatter(state.interval, time),
+      priceFormatter: (price) => formatAxisPrice(price, state.item.symbol)
+    },
+    handleScale: { mouseWheel: false, pinch: true, axisPressedMouseMove: false },
+    handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+    grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: { color: "#cbd5e1", width: 1, style: 3 },
+      horzLine: { color: "#cbd5e1", width: 1, style: 3 }
+    },
+    rightPriceScale: {
+      borderColor: "#dbe3f1",
+      scaleMargins: { top: 0.19, bottom: 0.08 },
+      minimumWidth: PRICE_SCALE_WIDTH
+    },
+    timeScale: {
+      borderColor: "#dbe3f1",
+      timeVisible: isIntraday(state.interval),
+      secondsVisible: false,
+      rightOffset: CHART_RIGHT_OFFSET,
+      barSpacing: CHART_BAR_SPACING,
+      tickMarkFormatter: (time) => tickFormatter(state.interval, time)
+    }
+  });
+
+  new ResizeObserver((entries) => {
+    if (!entries.length) return;
+    const { width, height } = entries[0].contentRect;
+    chart.applyOptions({ width, height });
+  }).observe(container);
+
+  const candleSeries = chart.addCandlestickSeries({
+    upColor: "#d92c2c",
+    downColor: "#1f5bd8",
+    borderVisible: true,
+    borderUpColor: "#d92c2c",
+    borderDownColor: "#1f5bd8",
+    wickUpColor: "#d92c2c",
+    wickDownColor: "#1f5bd8",
+    lastValueVisible: true,
+    priceLineVisible: true,
+    priceLineColor: "#ef4444",
+    priceLineWidth: 1,
+    priceFormat
+  });
+
+  const maSeries = {};
+  for (const period of MA_PERIODS) {
+    maSeries[period] = chart.addLineSeries({
+      color: MA_COLORS[period],
+      lineWidth: 2,
+      crosshairMarkerVisible: false,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      priceFormat
+    });
+  }
+
+  return { chart, candleSeries, maSeries };
 }
-function createCard(item, index) {
-  const card = template.content.firstElementChild.cloneNode(true); chartGrid.append(card);
-  const state = { item, card, canvas: card.querySelector("canvas"), loadingEl: card.querySelector(".loading"), alert: card.querySelector(".signal-alert"), interval: "1d", limit: 120, chartType: "three-line", rows: [], lines: [], threeLines: [], pnfColumns: [], macdValues: [], drawnLines: [], viewOffset: 0, maxViewOffset: 0, crosshair: null, chartGeometry: null, previousMacdSign: null, pendingTwoLineAlert: null };
-  card.querySelector(".symbol-input").value = item.name; card.querySelector(".symbol-code").textContent = `티커 ${tickerFor(item.symbol)}`;
-  state.canvas.addEventListener("pointermove", (event) => { if (state.dragStartX != null) { const delta = state.dragStartX - event.clientX; const step = Math.max(4, state.canvas.clientWidth / 100); state.viewOffset = Math.min(state.maxViewOffset, Math.max(0, state.dragOriginOffset + Math.round(delta / step))); state.crosshair = null; drawChart(state); return; } showCrosshair(state, event); });
-  state.canvas.addEventListener("pointerdown", (event) => { state.dragStartX = event.clientX; state.dragOriginOffset = state.viewOffset; state.crosshair = null; state.canvas.setPointerCapture(event.pointerId); drawChart(state); });
-  state.canvas.addEventListener("pointerup", (event) => { state.dragStartX = null; state.canvas.releasePointerCapture?.(event.pointerId); });
-  state.canvas.addEventListener("pointercancel", () => { state.dragStartX = null; }); state.canvas.addEventListener("pointerleave", () => { if (state.dragStartX == null) { state.crosshair = null; drawChart(state); } });
-  const input = card.querySelector(".symbol-input"); let searchTimer; input.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => suggestSymbols(state, input.value), 180); }); input.addEventListener("focus", () => suggestSymbols(state, input.value)); input.addEventListener("blur", () => setTimeout(() => card.querySelector(".suggestions").replaceChildren(), 150));
-  const period = card.querySelector(".period-input"); period.addEventListener("change", () => { state.limit = Math.min(700, Math.max(20, Number(period.value) || defaultLimit(state.interval))); period.value = state.limit; state.previousMacdSign = null; state.pendingTwoLineAlert = null; refreshChart(state, true); }); state.alert.querySelector("button").addEventListener("click", () => state.alert.classList.remove("visible")); chartState.set(index, state); renderTimeframes(state); renderChartTypes(state); refreshChart(state, true); return state;
+
+function rowByTime(state, time) {
+  return state.rows.find((row) => row.time === time);
 }
-async function refreshMarket() {
-  try { const quotes = await Promise.all(MARKET_ITEMS.map(async (item) => ({ item, quote: await fetchJson(`/quote?symbol=${encodeURIComponent(item.symbol)}&mode=${sessionMode}`) }))); marketSummary.replaceChildren(...quotes.map(({ item, quote }) => { const rate = Number(quote.changePercent ?? quote.changeRate); const up = rate >= 0; const status = quote.marketStatus === "장중" ? "장중" : "장종료"; const el = document.createElement("div"); el.className = `market-item ${up ? "up" : "down"}`; el.innerHTML = `<span>${item.label}</span><strong>${formatNumber(quote.price, item.decimals)}</strong><em>${Number.isFinite(rate) ? `${up ? "+" : ""}${rate.toFixed(2)}%` : "--"}</em><small class="${status === "장중" ? "open" : ""}">${status}</small>`; return el; })); } catch { marketSummary.textContent = "시장 요약을 갱신 중입니다"; }
+
+function marketDateKey(symbol, time) {
+  const date = typeof time === "number" ? new Date(time * 1000) : new Date(time);
+  const timeZone = (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) ? "Asia/Seoul" : "America/New_York";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
 }
-document.querySelectorAll(".session-button").forEach((button) => button.addEventListener("click", () => { sessionMode = button.dataset.mode; localStorage.setItem(SESSION_MODE_KEY, sessionMode); document.querySelectorAll(".session-button").forEach((item) => item.classList.toggle("active", item === button)); refreshMarket(); chartState.forEach((state) => refreshChart(state, true)); }));
-async function startRefreshLoops(states) {
-  let liveRefreshMs = REFRESH_MS;
-  try { const health = await fetchJson("/health"); if (health.kis?.enabled) liveRefreshMs = 3_000; } catch { /* Vercel/public mode keeps the 30-second cadence */ }
-  setInterval(() => states.forEach((state) => refreshChart(state)), REFRESH_MS);
-  setInterval(() => { refreshMarket(); states.forEach((state) => refreshLiveQuote(state)); }, liveRefreshMs);
+
+function marketMinute(symbol, time) {
+  const date = typeof time === "number" ? new Date(time * 1000) : new Date(time);
+  const timeZone = (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) ? "Asia/Seoul" : "America/New_York";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+  return Number(parts.hour) * 60 + Number(parts.minute);
 }
-const states = loadSavedCharts().map(createCard); const resizeObserver = new ResizeObserver(() => chartState.forEach(drawChart)); resizeObserver.observe(chartGrid); refreshMarket(); startRefreshLoops(states); window.addEventListener("focus", () => { refreshMarket(); states.forEach((state) => refreshChart(state)); });
+
+function isRegularSessionRow(symbol, row) {
+  const minute = marketMinute(symbol, row.time);
+  if (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) return minute >= 9 * 60 && minute <= 15 * 60 + 30;
+  return minute >= 9 * 60 + 30 && minute <= 16 * 60;
+}
+
+function sameMarketDateRows(state, row) {
+  const key = marketDateKey(state.item.symbol, row.time);
+  return state.rows.filter((candidate) => marketDateKey(state.item.symbol, candidate.time) === key);
+}
+
+function regularOpenForRow(state, row) {
+  if (!isIntraday(state.interval)) return row.open;
+  const dayRows = sameMarketDateRows(state, row);
+  return (dayRows.find((candidate) => isRegularSessionRow(state.item.symbol, candidate)) || dayRows[0] || row).open;
+}
+
+function previousRegularCloseForRow(state, row) {
+  const index = state.rows.findIndex((candidate) => candidate.time === row.time);
+  if (!isIntraday(state.interval)) return Number(state.rows[index - 1]?.close);
+  if (Number.isFinite(Number(state.previousClose))) return Number(state.previousClose);
+  const currentKey = marketDateKey(state.item.symbol, row.time);
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const candidate = state.rows[i];
+    if (marketDateKey(state.item.symbol, candidate.time) !== currentKey && isRegularSessionRow(state.item.symbol, candidate)) {
+      return Number(candidate.close);
+    }
+  }
+  return NaN;
+}
+
+function tooltipValues(state, row) {
+  const open = isIntraday(state.interval) ? row.open : regularOpenForRow(state, row);
+  const close = row.close;
+  const base = isIntraday(state.interval) ? open : previousRegularCloseForRow(state, row);
+  const changePct = Number.isFinite(base) && base !== 0
+    ? ((close - base) / base) * 100
+    : NaN;
+  return { open, close, changePct };
+}
+
+function showTooltip(state, param) {
+  const tooltip = state.card.querySelector(".price-tooltip");
+  if (!param?.time || !param.point || param.point.x < 0 || param.point.y < 0) {
+    tooltip.style.display = "none";
+    return;
+  }
+
+  const row = rowByTime(state, param.time);
+  if (!row) {
+    tooltip.style.display = "none";
+    return;
+  }
+
+  const decimals = priceDecimalsForSymbol(state.item.symbol);
+  const { open, close, changePct } = tooltipValues(state, row);
+  const direction = !Number.isFinite(changePct) || changePct >= 0 ? "up" : "down";
+  tooltip.innerHTML = `
+    <div class="tooltip-date">${formatTooltipTime(state.interval, row.time)}</div>
+    <div class="tooltip-row"><span>시가</span><strong>${formatNumber(open, decimals)}</strong></div>
+    <div class="tooltip-row"><span>종가</span><strong>${formatNumber(close, decimals)}</strong></div>
+    <div class="tooltip-row ${direction}"><span>등락률</span><strong>${formatChange(changePct, 2)}</strong></div>
+  `;
+
+  const cardRect = state.card.getBoundingClientRect();
+  const tooltipWidth = 142;
+  const tooltipHeight = 86;
+  const left = Math.min(Math.max(8, param.point.x + 14), cardRect.width - tooltipWidth - 8);
+  const top = Math.min(Math.max(8, param.point.y + 14), cardRect.height - tooltipHeight - 8);
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+  tooltip.style.display = "block";
+}
+
+function visibleRows(state) {
+  const isKoreanNtxIntraday = sessionMode === "NTX" && isIntraday(state.interval) && isKoreanSymbol(state.item.symbol);
+  const limit = isKoreanNtxIntraday ? Math.min(MAX_LIMIT, Math.max(state.limit, NTX_VISIBLE_LIMIT)) : state.limit;
+  return state.rows?.slice(-limit) || [];
+}
+
+function localDateKeyForSymbol(symbol, timestamp) {
+  const timeZone = (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) ? "Asia/Seoul" : "America/New_York";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date(timestamp * 1000));
+}
+
+function shouldIgnoreIntradayPayload(state, rows, initial) {
+  if (initial || !isIntraday(state.interval) || !state.rows?.length || !rows?.length) return false;
+  const previousLatest = state.rows.at(-1);
+  const nextLatest = rows.at(-1);
+  if (!previousLatest || !nextLatest) return false;
+  const previousTime = Number(previousLatest.time);
+  const nextTime = Number(nextLatest.time);
+  if (!Number.isFinite(previousTime) || !Number.isFinite(nextTime)) return false;
+  if (nextTime < previousTime) return true;
+  const seconds = INTERVAL_SECONDS[state.interval] || 60;
+  const priorNext = rows.at(-2);
+  const priorNextTime = Number(priorNext?.time);
+  const sameTailDate = Number.isFinite(priorNextTime)
+    && localDateKeyForSymbol(state.item.symbol, priorNextTime) === localDateKeyForSymbol(state.item.symbol, nextTime);
+  if (sameTailDate && nextTime - priorNextTime > seconds * 2.5) return true;
+  if (rows.length < Math.max(30, state.rows.length * 0.75)) return true;
+  return false;
+}
+
+function keepLatestVisible(state) {
+  const rows = visibleRows(state);
+  if (!rows.length) return;
+  const total = state.rows.length;
+  const visible = rows.length;
+  const to = Math.max(0, total - 1 + CHART_RIGHT_OFFSET);
+  state.instance.chart.timeScale().setVisibleLogicalRange({
+    from: Math.max(0, total - visible),
+    to
+  });
+}
+
+function isViewAtLatest(state) {
+  try {
+    const range = state.instance.chart.timeScale().getVisibleLogicalRange();
+    if (!range || !state.rows?.length) return true;
+    const lastIndex = state.rows.length - 1 + CHART_RIGHT_OFFSET;
+    return range.to >= lastIndex - 3;
+  } catch {
+    return true;
+  }
+}
+
+function drawMacdBackground(state) {
+  const { bgCanvas, rows, macd, instance } = state;
+  if (!bgCanvas || !rows?.length || !macd?.length) return;
+  const rect = bgCanvas.getBoundingClientRect();
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const width = Math.max(1, Math.floor(rect.width * dpr));
+  const height = Math.max(1, Math.floor(rect.height * dpr));
+  if (bgCanvas.width !== width || bgCanvas.height !== height) {
+    bgCanvas.width = width;
+    bgCanvas.height = height;
+  }
+
+  const ctx = bgCanvas.getContext("2d");
+  ctx.clearRect(0, 0, width, height);
+
+  const timeScale = instance.chart.timeScale();
+  const points = rows
+    .map((row, index) => {
+      const x = timeScale.timeToCoordinate(row.time);
+      return Number.isFinite(x) ? { index, x: x * dpr, row } : null;
+    })
+    .filter((point) => point && point.x >= -width * 0.05 && point.x <= width * 1.05);
+
+  if (!points.length) return;
+
+  const gaps = points
+    .slice(1)
+    .map((point, index) => point.x - points[index].x)
+    .filter((gap) => Number.isFinite(gap) && gap > 0)
+    .sort((a, b) => a - b);
+  const barWidth = gaps[Math.floor(gaps.length / 2)] || width / Math.max(1, visibleRows(state).length);
+
+  function boundaryLeft(point, index) {
+    if (index === 0) return point.x - barWidth / 2;
+    return (points[index - 1].x + point.x) / 2;
+  }
+
+  function boundaryRight(point, index) {
+    if (index === points.length - 1) return point.x + barWidth / 2;
+    return (point.x + points[index + 1].x) / 2;
+  }
+
+  function paintSegment(fromX, toX, positive) {
+    const x = Math.max(0, Math.round(fromX));
+    const nextX = Math.min(width, Math.round(toX));
+    const segmentWidth = Math.max(0, nextX - x);
+    if (!segmentWidth) return;
+    ctx.fillStyle = positive ? "rgba(239, 83, 80, 0.16)" : "rgba(21, 101, 192, 0.16)";
+    ctx.fillRect(x, 0, segmentWidth, height);
+  }
+
+  let segmentStartX = 0;
+  let segmentPositive = (macd[points[0].index]?.value ?? 0) >= 0;
+
+  for (let i = 1; i < points.length; i += 1) {
+    const point = points[i];
+    const positive = (macd[point.index]?.value ?? 0) >= 0;
+    if (positive === segmentPositive) continue;
+    paintSegment(segmentStartX, boundaryLeft(point, i), segmentPositive);
+    segmentStartX = boundaryLeft(point, i);
+    segmentPositive = positive;
+  }
+
+  paintSegment(segmentStartX, width, segmentPositive);
+
+  // Draw blue vertical lines for date changes in intraday charts
+  if (isIntraday(state.interval)) {
+    for (let i = 0; i < points.length; i += 1) {
+      const point = points[i];
+      if (point.index === 0) continue;
+      const prevRow = rows[point.index - 1];
+      const currentDate = marketDateKey(state.item.symbol, point.row.time);
+      const prevDate = marketDateKey(state.item.symbol, prevRow.time);
+      if (currentDate !== prevDate) {
+        ctx.strokeStyle = "rgba(31, 91, 216, 0.75)"; // blue color with 0.75 opacity
+        ctx.lineWidth = 1 * dpr;
+        ctx.setLineDash([4 * dpr, 3 * dpr]); // Dashed line
+        ctx.beginPath();
+        ctx.moveTo(point.x, 0);
+        ctx.lineTo(point.x, height);
+        ctx.stroke();
+        ctx.setLineDash([]); // Reset line dash
+      }
+    }
+  }
+}
+
+function updateSeriesVisibility(state) {
+  if (!state.rows?.length) return;
+  const { instance, visible } = state;
+  instance.candleSeries.setData(visible.candle ? state.rows : []);
+  for (const period of MA_PERIODS) {
+    instance.maSeries[period].setData(visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
+  }
+}
+
+function renderLegend(state, payload) {
+  const rows = visibleRows(state);
+  const last = rows.at(-1);
+  const changePct = Number(payload.changePercent ?? 0);
+  const direction = changePct >= 0 ? "up" : "down";
+  const decimals = priceDecimalsForSymbol(payload.symbol || state.item.symbol);
+  const card = state.card;
+
+  if (!isSymbolEditing(state)) {
+    card.querySelector(".symbol-input").value = payload.name || payload.symbol;
+  }
+  card.querySelector(".symbol-code").textContent = payload.symbol;
+  const priceEl = card.querySelector(".last-price");
+  priceEl.textContent = formatNumber(payload.price ?? last?.close, decimals);
+  priceEl.className = `last-price ${direction}`;
+  const statusEl = card.querySelector(".market-status");
+  statusEl.textContent = payload.marketStatus || "종가";
+  statusEl.className = `market-status ${direction}`;
+  card.querySelector(".last-change").textContent = formatChange(changePct, 2);
+  card.querySelector(".last-change").className = `last-change ${direction}`;
+}
+
+function applyPayload(state, payload, initial = false) {
+  const sourceRows = payload.series || [];
+  if (!sourceRows.length) return;
+  const previousLastTime = state.rows?.at(-1)?.time;
+  const rows = sourceRows;
+  const latest = rows.at(-1);
+  if (!rows.length) return;
+  if (shouldIgnoreIntradayPayload(state, rows, initial)) return;
+
+  state.sourceRows = sourceRows;
+  state.rows = rows;
+  state.macd = calcMacd(rows);
+  state.previousClose = Number(payload.previousClose);
+
+  // isTickUpdate: same last candle time = only price updated, not a new bar
+  const isTickUpdate = !initial && isIntraday(state.interval) && previousLastTime === latest.time;
+
+  // Only apply chart/series options on full reloads to avoid resetting pan/zoom state
+  if (!isTickUpdate) {
+    const priceFormat = priceFormatForSymbol(state.item.symbol);
+    state.instance.chart.applyOptions({
+      localization: {
+        timeFormatter: (time) => tickFormatter(state.interval, time),
+        priceFormatter: (price) => formatAxisPrice(price, state.item.symbol)
+      },
+      timeScale: {
+        timeVisible: isIntraday(state.interval),
+        rightOffset: CHART_RIGHT_OFFSET,
+        barSpacing: CHART_BAR_SPACING,
+        tickMarkFormatter: (time) => tickFormatter(state.interval, time)
+      }
+    });
+    state.instance.candleSeries.applyOptions({ priceFormat });
+    for (const period of MA_PERIODS) {
+      state.instance.maSeries[period].applyOptions({ priceFormat });
+    }
+  }
+
+  if (isTickUpdate && state.visible.candle) {
+    state.instance.candleSeries.update(latest);
+  } else {
+    state.instance.candleSeries.setData(state.visible.candle ? rows : []);
+  }
+
+  if (isTickUpdate) {
+    for (const period of MA_PERIODS) {
+      if (!state.visible[`ma${period}`]) continue;
+      const maData = calcVisibleSma(state, period);
+      const lastMa = maData.at(-1);
+      if (lastMa) state.instance.maSeries[period].update(lastMa);
+    }
+  } else {
+    for (const period of MA_PERIODS) {
+      state.instance.maSeries[period].setData(state.visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
+    }
+  }
+
+  renderLegend(state, payload);
+  if (isIntraday(state.interval)) keepLatestVisible(state);
+  requestAnimationFrame(() => drawMacdBackground(state));
+  state.card.classList.add("loaded");
+}
+
+async function fetchChart(state) {
+  const params = new URLSearchParams({
+    symbol: state.item.symbol,
+    name: state.item.name,
+    interval: state.interval,
+    limit: String(Math.max(FETCH_LIMIT, state.limit + WARMUP_BARS)),
+    mode: sessionMode
+  });
+  const response = await fetch(`/stock8-7/api/chart?${params.toString()}`);
+  if (!response.ok) throw new Error(`chart ${response.status}`);
+  return response.json();
+}
+
+async function refreshCard(state, initial = false) {
+  if (initial) {
+    state.card.classList.remove("loaded");
+    state.card.querySelector(".loading").textContent = "불러오는 중";
+  }
+  try {
+    const payload = await fetchChart(state);
+    state.item = {
+      symbol: payload.symbol,
+      name: payload.name,
+      decimals: payload.decimals
+    };
+    applyPayload(state, payload, initial);
+  } catch {
+    state.card.querySelector(".loading").textContent = "데이터 오류";
+  }
+}
+
+function closeSuggestions(card) {
+  card.querySelector(".suggestions").classList.remove("open");
+}
+
+async function selectSearchItem(card, item) {
+  const state = chartState.get(card.dataset.cardId);
+  const input = card.querySelector(".symbol-input");
+  state.item = {
+    symbol: item.symbol,
+    name: item.name,
+    decimals: item.symbol.endsWith(".KS") || item.symbol.endsWith(".KQ") ? 0 : 2
+  };
+  state.isEditingSymbol = false;
+  input.value = item.name;
+  input.blur();
+  closeSuggestions(card);
+  saveCharts();
+  await refreshCard(state, true);
+}
+
+document.addEventListener("pointerdown", (event) => {
+  document.querySelectorAll(".chart-card").forEach((card) => {
+    if (!card.querySelector(".symbol-search")?.contains(event.target)) closeSuggestions(card);
+  });
+});
+
+async function showSuggestions(card, query) {
+  const suggestions = card.querySelector(".suggestions");
+  const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(query)}`);
+  const json = await response.json();
+  const manualItem = manualSearchItem(query);
+  const results = [...(json.results || [])];
+  if (manualItem && !results.some((item) => item.symbol === manualItem.symbol)) results.push(manualItem);
+  suggestions.replaceChildren(
+    ...results.map((item) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "suggestion";
+      button.innerHTML = `<b>${item.name}</b><span>${item.symbol}</span>`;
+      button.addEventListener("mousedown", async (event) => {
+        event.preventDefault();
+        await selectSearchItem(card, item);
+      });
+      return button;
+    })
+  );
+  suggestions.classList.toggle("open", results.length > 0);
+}
+
+function manualSearchItem(query) {
+  const raw = String(query || "").trim();
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+  if (upper === "KOSPI" || upper === "코스피") return { symbol: "^KS11", name: "KOSPI" };
+  if (upper === "KOSDAQ" || upper === "코스닥") return { symbol: "^KQ11", name: "KOSDAQ" };
+  if (upper === "NASDAQ" || upper === "나스닥") return { symbol: "^IXIC", name: "나스닥" };
+  if (upper === "^KS11") return { symbol: "^KS11", name: "KOSPI" };
+  if (upper === "^KQ11") return { symbol: "^KQ11", name: "KOSDAQ" };
+  if (upper === "^IXIC") return { symbol: "^IXIC", name: "나스닥" };
+  
+  if (/^\d{6}$/.test(raw)) return { symbol: `${raw}.KS`, name: raw };
+  if (/^\d{6}\.(KS|KQ)$/i.test(raw)) return { symbol: upper, name: raw.slice(0, 6) };
+  if (/^[A-Z][A-Z0-9.-]{0,9}(\.US)?$/i.test(raw)) {
+    const ticker = upper.endsWith(".US") ? upper.slice(0, -3) : upper;
+    return { symbol: `${ticker}.US`, name: ticker };
+  }
+  return null;
+}
+
+function bindSearch(card) {
+  const input = card.querySelector(".symbol-input");
+  const suggestions = card.querySelector(".suggestions");
+  const state = chartState.get(card.dataset.cardId);
+  suggestions.addEventListener("pointerdown", (event) => event.stopPropagation());
+  input.addEventListener("focus", () => {
+    state.isEditingSymbol = true;
+    showSuggestions(card, input.value);
+  });
+  input.addEventListener("input", () => {
+    state.isEditingSymbol = true;
+    showSuggestions(card, input.value);
+  });
+  input.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const first = card.querySelector(".suggestion");
+    if (first) {
+      first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      return;
+    }
+    const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(input.value)}`);
+    const json = await response.json();
+    const item = json.results?.[0] || manualSearchItem(input.value);
+    if (item) await selectSearchItem(card, item);
+  });
+  input.addEventListener("blur", () => {
+    setTimeout(() => {
+      closeSuggestions(card);
+      state.isEditingSymbol = false;
+    }, 240);
+  });
+}
+
+function bindLegend(card, state) {
+  card.querySelectorAll(".ma-legend button").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.dataset.series;
+      state.visible[key] = !state.visible[key];
+      button.classList.toggle("off", !state.visible[key]);
+      updateSeriesVisibility(state);
+    });
+  });
+}
+
+function renderTimeframeButtons(card, state) {
+  const root = card.querySelector(".timeframe-buttons");
+  root.replaceChildren(
+    ...TIMEFRAMES.map((timeframe) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `tf-button${timeframe.value === state.interval ? " active" : ""}`;
+      button.textContent = timeframe.label;
+      button.addEventListener("click", async () => {
+        state.interval = timeframe.value;
+        state.limit = defaultLimitForInterval(state.interval);
+        card.querySelector(".period-input").value = String(state.limit);
+        renderTimeframeButtons(card, state);
+        await refreshCard(state, true);
+      });
+      return button;
+    })
+  );
+}
+
+function bindPeriod(card, state) {
+  const input = card.querySelector(".period-input");
+  input.value = String(state.limit);
+  const apply = async () => {
+    const next = Math.min(MAX_LIMIT, Math.max(minimumLimitForInterval(state.interval), Number(input.value || DEFAULT_LIMIT)));
+    input.value = String(next);
+    state.limit = next;
+    await refreshCard(state, true);
+  };
+  input.addEventListener("change", apply);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") input.blur();
+  });
+}
+
+async function createCard(item, index) {
+  const fragment = template.content.cloneNode(true);
+  const card = fragment.querySelector(".chart-card");
+  const stage = fragment.querySelector(".chart-stage");
+  const bgCanvas = fragment.querySelector(".macd-bg");
+  const id = `card-${index}`;
+  card.dataset.cardId = id;
+  chartGrid.append(card);
+
+  const state = {
+    card,
+    bgCanvas,
+    item,
+    interval: DEFAULT_INTERVAL,
+    limit: DEFAULT_LIMIT,
+    sourceRows: [],
+    rows: [],
+    macd: [],
+    visible: {
+      candle: true,
+      ma5: true,
+      ma10: true,
+      ma20: true,
+      ma60: true,
+      ma120: true,
+      ma240: true
+    }
+  };
+  state.instance = createLwChart(stage, state);
+  state.instance.chart.timeScale().subscribeVisibleLogicalRangeChange(() => drawMacdBackground(state));
+  state.instance.chart.timeScale().subscribeSizeChange(() => drawMacdBackground(state));
+  state.instance.chart.subscribeCrosshairMove((param) => showTooltip(state, param));
+
+  chartState.set(id, state);
+  bindSearch(card);
+  bindLegend(card, state);
+  renderTimeframeButtons(card, state);
+  bindPeriod(card, state);
+  await refreshCard(state, true);
+}
+
+function renderMarketItem(item, quote) {
+  const change = Number(quote.changePercent ?? quote.changeRate ?? 0);
+  const direction = change >= 0 ? "up" : "down";
+  const status = quote.marketStatus === "장중" ? "장중" : "장종료";
+  const span = document.createElement("span");
+  span.className = `market-item ${direction}`;
+  span.innerHTML = `${item.label}<strong>${formatNumber(quote.price, item.decimals)}</strong><span class="market-change">(${formatChange(change, 2)})</span><span class="market-session ${direction}">${status}</span>`;
+  return span;
+}
+
+async function loadMarketSummary() {
+  if (marketRefreshInFlight) return;
+  marketRefreshInFlight = true;
+  try {
+    const results = await Promise.all(MARKET_ITEMS.map(async (item) => {
+      try {
+        const response = await fetch(`/stock8-7/api/quote?symbol=${encodeURIComponent(item.symbol)}&mode=${sessionMode}`);
+        return { item, quote: await response.json() };
+      } catch {
+        return { item, quote: null };
+      }
+    }));
+    marketSummary.replaceChildren(
+      ...results
+        .filter(({ quote }) => quote && Number.isFinite(Number(quote.price)))
+        .map(({ item, quote }) => renderMarketItem(item, quote))
+    );
+  } finally {
+    marketRefreshInFlight = false;
+  }
+}
+
+async function refreshAll(initial = false) {
+  if (!initial && chartRefreshInFlight) return;
+  chartRefreshInFlight = true;
+  try {
+    const states = [...chartState.values()].filter((state) => initial || !isSymbolEditing(state));
+    await Promise.all(states.map((state) => refreshCard(state, initial)));
+  } finally {
+    chartRefreshInFlight = false;
+  }
+}
+
+sessionButtons.forEach((button) => {
+  button.addEventListener("click", async () => {
+    const nextMode = button.dataset.mode === "NTX" ? "NTX" : "KRX";
+    if (nextMode === sessionMode) return;
+    sessionMode = nextMode;
+    localStorage.setItem(SESSION_MODE_KEY, sessionMode);
+    updateSessionButtons();
+    await Promise.all([loadMarketSummary(), refreshAll(true)]);
+  });
+});
+
+updateSessionButtons();
+await Promise.all([loadMarketSummary(), ...loadSavedCharts().map(createCard)]);
+
+setInterval(loadMarketSummary, UPDATE_INTERVAL_MS);
+setInterval(() => {
+  refreshAll(false);
+}, UPDATE_INTERVAL_MS);

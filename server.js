@@ -10,10 +10,7 @@ const KIS_APP_SECRET = process.env.KIS_APP_SECRET || "";
 const KIS_BASE_URL = (process.env.KIS_BASE_URL || "https://openapi.koreainvestment.com:9443").replace(/\/$/, "");
 const KIS_ENABLED = Boolean(KIS_APP_KEY && KIS_APP_SECRET && KIS_BASE_URL);
 const KIS_TOKEN_SAFETY_MS = 60_000;
-// Event-based charts need more source candles than the number shown on screen.
-// The UI remains capped at 700, while the API can supply up to five times that
-// history for stable Three-Line Break, Renko and P&F construction.
-const MAX_QUERY_LIMIT = 3500;
+const MAX_QUERY_LIMIT = 700;
 let kisTokenCache = null;
 let koreanMasterCache = {
   loadedAt: 0,
@@ -352,7 +349,7 @@ function marketStatus(symbol, now = new Date()) {
     const weekday = parts.weekday;
     const open = !["Sat", "Sun"].includes(weekday) && minute >= 9 * 60 && minute < 15 * 60 + 30;
     if (isKoreanIndex(symbol)) return open ? "장중" : "장종료";
-    return open ? "장중" : "장종료";
+    return open ? "장중" : "종가";
   }
   if (symbol.endsWith(".US") || symbol === "^IXIC" || symbol === "^GSPC") {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -365,9 +362,9 @@ function marketStatus(symbol, now = new Date()) {
     const minute = Number(parts.hour) * 60 + Number(parts.minute);
     const weekday = parts.weekday;
     const open = !["Sat", "Sun"].includes(weekday) && minute >= 9 * 60 + 30 && minute < 16 * 60;
-    return open ? "장중" : "장종료";
+    return open ? "장중" : "종가";
   }
-  return "장종료";
+  return "종가";
 }
 
 async function getKisAccessToken() {
@@ -870,7 +867,7 @@ function parseNaverRealtimeQuote(symbol, item, mode = "KRX") {
     marketTime: asOf,
     marketStatus: isKoreanIndex(normalized)
       ? (statusOpen ? "장중" : "장종료")
-      : (statusOpen ? "장중" : "장종료"),
+      : (statusOpen ? "장중" : "종가"),
     source: useNxt ? "naver-nxt-realtime" : "naver-realtime"
   };
   if (useNxt) {
@@ -1717,16 +1714,6 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       yahooError = err;
     }
 
-    if (KIS_ENABLED && kisMeta.supported && !preferNaverNxt) {
-      kisMeta.attempted = true;
-      try {
-        liveQuote = await fetchKisQuote(normalized);
-        kisMeta.ok = true;
-      } catch (error) {
-        kisMeta.error = kisErrorMessage(error);
-      }
-    }
-
     if (KIS_ENABLED && isKoreanSymbol(normalized) && isIntradayInterval(interval) && !preferNaverNxt) {
       kisMeta.intradayAttempted = true;
       try {
@@ -2015,11 +2002,7 @@ async function sendJson(res, payload) {
 }
 
 function appPathname(url) {
-  // No setting uses /stock12; BASE_PATH=/ intentionally means root service.
-  const basePath = process.env.BASE_PATH == null ? "/stock12" : process.env.BASE_PATH.replace(/\/$/, "");
-  const stripped = basePath && (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`))
-    ? url.pathname.slice(basePath.length)
-    : url.pathname;
+  const stripped = url.pathname.replace(/^\/stock8-7(?=\/|$)/, "");
   return stripped || "/";
 }
 
@@ -2040,11 +2023,11 @@ async function serveStatic(req, res) {
   }
 }
 
-export async function handleRequest(req, res) {
+createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = appPathname(url);
 
-  if (pathname === "/health" || pathname === "/api/health") {
+  if (pathname === "/health") {
     await sendJson(res, { status: "ok", kis: kisStatusPayload() });
     return;
   }
@@ -2106,17 +2089,7 @@ export async function handleRequest(req, res) {
   }
 
   await serveStatic(req, res);
-}
-
-if (process.argv[1]?.endsWith("server.js")) {
-  createServer((req, res) => {
-    handleRequest(req, res).catch((error) => {
-      console.error("Request failed", error);
-      res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify({ ok: false, error: "데이터를 불러오지 못했습니다." }));
-    });
-  }).listen(PORT, () => {
-    console.log(`stock12 three-line-break dashboard: http://127.0.0.1:${PORT}`);
-    console.log(`KIS realtime: ${KIS_ENABLED ? "enabled" : "disabled"}`);
-  });
-}
+}).listen(PORT, () => {
+  console.log(`stock8 four-candle dashboard: http://127.0.0.1:${PORT}`);
+  console.log(`KIS realtime: ${KIS_ENABLED ? "enabled" : "disabled"}`);
+});
