@@ -13,6 +13,7 @@ const SESSION_MODE_KEY = "stock12.threeLineBreak.session.v1";
 const REFRESH_MS = 30_000;
 const chartGrid = document.querySelector("#chartGrid");
 const marketSummary = document.querySelector("#marketSummary");
+const sourceIndicator = document.querySelector("#sourceIndicator");
 const template = document.querySelector("#chart-card-template");
 const chartState = new Map();
 const apiBase = location.pathname === "/stock12" || location.pathname.startsWith("/stock12/") ? "/stock12/api" : "/api";
@@ -48,9 +49,12 @@ function macd(rows) { const closes = rows.map((row) => Number(row.close)); const
 // the high/low of the previous three completed lines. Input is closing prices.
 function threeLineBreak(rows) {
   if (!rows.length) return [];
-  const firstClose = Number(rows[0].close);
-  const lines = [{ open: firstClose, close: firstClose, high: firstClose, low: firstClose, time: rows[0].time, direction: 0 }];
-  for (const row of rows.slice(1)) {
+  const firstClose = Number(rows[0].close); let firstIndex = 1;
+  while (firstIndex < rows.length && Number(rows[firstIndex].close) === firstClose) firstIndex += 1;
+  if (firstIndex >= rows.length) return [{ open: firstClose, close: firstClose, high: firstClose, low: firstClose, time: rows[0].time, direction: 0 }];
+  const nextClose = Number(rows[firstIndex].close);
+  const lines = [{ open: firstClose, close: nextClose, high: Math.max(firstClose, nextClose), low: Math.min(firstClose, nextClose), time: rows[firstIndex].time, direction: nextClose > firstClose ? 1 : -1 }];
+  for (const row of rows.slice(firstIndex + 1)) {
     const close = Number(row.close);
     const last = lines[lines.length - 1];
     const recent = lines.slice(-3);
@@ -77,14 +81,15 @@ function tickSize(price, symbol) {
   return 1_000;
 }
 function roundToTick(value, tick) { return Math.max(tick, Math.round(value / tick) * tick); }
-function autoBoxSize(rows, symbol) {
-  const changes = rows.slice(1).map((row, index) => Math.abs(Number(row.close) - Number(rows[index].close))).filter((value) => value > 0).sort((a, b) => a - b);
-  const median = changes[Math.floor(changes.length / 2)] || Math.abs(Number(rows.at(-1)?.close || 1)) * .003;
-  return roundToTick(Math.max(median * 2, tickSize(Number(rows.at(-1)?.close || 1), symbol)), tickSize(Number(rows.at(-1)?.close || 1), symbol));
+function chartBoxSize(rows, symbol) {
+  const price = Math.abs(Number(rows.at(-1)?.close || 1)); const tick = tickSize(price, symbol); const target = Math.max(tick, price * .0025);
+  const power = 10 ** Math.floor(Math.log10(target)); const normalized = target / power;
+  const nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return roundToTick(nice * power, tick);
 }
 function renko(rows, symbol) {
   if (!rows.length) return [];
-  const box = autoBoxSize(rows, symbol); const first = Number(rows[0].close);
+  const box = chartBoxSize(rows, symbol); const first = Number(rows[0].close);
   const bricks = []; let close = Math.round(first / box) * box; let direction = 0;
   for (const row of rows.slice(1)) {
     const value = Number(row.close);
@@ -98,23 +103,28 @@ function renko(rows, symbol) {
 }
 function pointAndFigure(rows, symbol) {
   if (!rows.length) return [];
-  const box = autoBoxSize(rows, symbol); let level = Math.round(Number(rows[0].close) / box) * box; let direction = 0; const columns = [];
+  const box = chartBoxSize(rows, symbol); let level = Math.round(Number(rows[0].close) / box) * box; let direction = 0; const columns = [];
   const makeColumn = (nextDirection, time) => { const column = { direction: nextDirection, time, levels: [] }; columns.push(column); direction = nextDirection; return column; };
   for (const row of rows.slice(1)) {
-    const value = Number(row.close); let column = columns.at(-1);
-    if (!direction && value >= level + box) { column = makeColumn(1, row.time); while (value >= level + box) { level += box; column.levels.push(level); } }
-    else if (!direction && value <= level - box) { column = makeColumn(-1, row.time); while (value <= level - box) { level -= box; column.levels.push(level); } }
-    else if (direction > 0 && value >= level + box) { while (value >= level + box) { level += box; column.levels.push(level); } column.time = row.time; }
-    else if (direction < 0 && value <= level - box) { while (value <= level - box) { level -= box; column.levels.push(level); } column.time = row.time; }
-    else if (direction > 0 && value <= level - box * 3) { column = makeColumn(-1, row.time); while (value <= level - box) { level -= box; column.levels.push(level); } }
-    else if (direction < 0 && value >= level + box * 3) { column = makeColumn(1, row.time); while (value >= level + box) { level += box; column.levels.push(level); } }
+    const high = Number(row.high ?? row.close); const low = Number(row.low ?? row.close); const close = Number(row.close); let column = columns.at(-1);
+    if (!direction) {
+      const upBoxes = Math.floor((high - level) / box); const downBoxes = Math.floor((level - low) / box);
+      if (upBoxes > 0 && (upBoxes > downBoxes || (upBoxes === downBoxes && close >= Number(row.open)))) { column = makeColumn(1, row.time); while (high >= level + box) { level += box; column.levels.push(level); } }
+      else if (downBoxes > 0) { column = makeColumn(-1, row.time); while (low <= level - box) { level -= box; column.levels.push(level); } }
+    } else if (direction > 0) {
+      if (high >= level + box) { while (high >= level + box) { level += box; column.levels.push(level); } column.time = row.time; }
+      else if (low <= level - box * 3) { column = makeColumn(-1, row.time); while (low <= level - box) { level -= box; column.levels.push(level); } }
+    } else if (low <= level - box) { while (low <= level - box) { level -= box; column.levels.push(level); } column.time = row.time; }
+    else if (high >= level + box * 3) { column = makeColumn(1, row.time); while (high >= level + box) { level += box; column.levels.push(level); } }
   }
-  return columns.length ? columns : [{ direction: 1, time: rows[0].time, levels: [level] }];
+  const result = columns.length ? columns : [{ direction: 1, time: rows[0].time, levels: [level] }];
+  result.boxSize = box; return result;
 }
 function updateChartGeometry(state) {
   state.threeLines = threeLineBreak(state.rows);
   state.lines = state.chartType === "renko" ? renko(state.rows, state.item.symbol) : state.threeLines;
   state.pnfColumns = state.chartType === "pnf" ? pointAndFigure(state.rows, state.item.symbol) : [];
+  state.boxSize = state.chartType === "pnf" ? state.pnfColumns.boxSize : state.chartType === "renko" ? chartBoxSize(state.rows, state.item.symbol) : null;
 }
 function resizeCanvas(canvas) {
   const rect = canvas.getBoundingClientRect(); const ratio = window.devicePixelRatio || 1;
@@ -152,18 +162,12 @@ function drawLegacyChart(state) {
 function drawCrosshair(state, ctx) {
   const crosshair = state.crosshair; const geometry = state.chartGeometry;
   if (!crosshair || !geometry) return;
-  const { pad, width, height, chartH, low, high } = geometry;
+  const { pad, width, height } = geometry;
   const right = width - pad.right; const bottom = height - pad.bottom;
   const x = Math.min(right, Math.max(pad.left, crosshair.x)); const lineY = Math.min(bottom, Math.max(pad.top, crosshair.y));
-  const price = high - (lineY - pad.top) / chartH * (high - low);
-  const priceText = formatNumber(price, decimalsFor(state.item.symbol)); const timeLabel = timeText(crosshair.time, state.interval);
   ctx.save(); ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.strokeStyle = "rgba(48,67,95,.72)";
   ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, bottom); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(pad.left, lineY); ctx.lineTo(right, lineY); ctx.stroke(); ctx.setLineDash([]);
-  ctx.font = "700 10px Inter, sans-serif"; const priceWidth = Math.ceil(ctx.measureText(priceText).width) + 10; const priceX = right + 3; const priceY = Math.min(bottom - 18, Math.max(pad.top, lineY - 9));
-  ctx.fillStyle = "#31496d"; ctx.fillRect(priceX, priceY, Math.min(priceWidth, width - priceX - 2), 18); ctx.fillStyle = "#fff"; ctx.textAlign = "left"; ctx.fillText(priceText, priceX + 5, priceY + 13);
-  const timeWidth = Math.ceil(ctx.measureText(timeLabel).width) + 10; const timeX = Math.min(right - timeWidth, Math.max(pad.left, x - timeWidth / 2)); const timeY = bottom + 4;
-  ctx.fillStyle = "#31496d"; ctx.fillRect(timeX, timeY, timeWidth, 18); ctx.fillStyle = "#fff"; ctx.fillText(timeLabel, timeX + 5, timeY + 13); ctx.restore();
+  ctx.beginPath(); ctx.moveTo(pad.left, lineY); ctx.lineTo(right, lineY); ctx.stroke(); ctx.restore();
 }
 function drawChart(state) {
   const { canvas, rows, lines, macdValues, pnfColumns } = state;
@@ -192,8 +196,13 @@ function drawChart(state) {
 
   if (state.chartType === "pnf") {
     const visibleCount = 80; const maxOffset = Math.max(0, pnfColumns.length - visibleCount); state.viewOffset = Math.min(maxOffset, Math.max(0, state.viewOffset || 0)); state.maxViewOffset = maxOffset;
-    const end = pnfColumns.length - state.viewOffset; const columns = pnfColumns.slice(Math.max(0, end - visibleCount), end); const step = chartW / Math.max(columns.length, 1); const glyph = Math.max(9, Math.min(16, step * .9)); state.drawnLines = [];
-    columns.forEach((column, index) => column.levels.forEach((level) => { const x = pad.left + step * (index + .5); const lineY = y(level); ctx.fillStyle = column.direction > 0 ? "#d93434" : "#1761b5"; ctx.font = `700 ${glyph}px Inter, sans-serif`; ctx.textAlign = "center"; ctx.fillText(column.direction > 0 ? "X" : "O", x, lineY + glyph * .34); state.drawnLines.push({ open: level, close: level, time: column.time, direction: column.direction, x, width: step, y1: lineY, y2: lineY }); }));
+    const end = pnfColumns.length - state.viewOffset; const columns = pnfColumns.slice(Math.max(0, end - visibleCount), end); const step = chartW / Math.max(columns.length, 1); const boxPixels = Math.abs(y(low + (state.boxSize || 1)) - y(low)); const glyph = Math.max(4, Math.min(10, step * .42, boxPixels * .78)); state.drawnLines = [];
+    columns.forEach((column, index) => column.levels.forEach((level) => {
+      const x = pad.left + step * (index + .5); const lineY = y(level); const half = glyph / 2; ctx.strokeStyle = column.direction > 0 ? "#e54848" : "#4169d8"; ctx.lineWidth = Math.max(1, glyph * .15); ctx.beginPath();
+      if (column.direction > 0) { ctx.moveTo(x - half, lineY - half); ctx.lineTo(x + half, lineY + half); ctx.moveTo(x + half, lineY - half); ctx.lineTo(x - half, lineY + half); }
+      else ctx.ellipse(x, lineY, half, half * .78, 0, 0, Math.PI * 2);
+      ctx.stroke(); state.drawnLines.push({ open: level, close: level, time: column.time, direction: column.direction, x, width: step, y1: lineY, y2: lineY });
+    }));
   } else {
     const visibleCount = 130; const maxOffset = Math.max(0, lines.length - visibleCount); state.viewOffset = Math.min(maxOffset, Math.max(0, state.viewOffset || 0)); state.maxViewOffset = maxOffset;
     const end = lines.length - state.viewOffset; const visibleLines = lines.slice(Math.max(0, end - visibleCount), end); const step = chartW / Math.max(visibleLines.length, 1); const brickWidth = Math.max(3, Math.min(18, step * .72));
@@ -204,20 +213,27 @@ function drawChart(state) {
   ctx.fillStyle = "#68758b"; ctx.font = "11px Inter, sans-serif"; ctx.textAlign = "left"; timeline.forEach((row, index) => ctx.fillText(timeText(row.time, state.interval).slice(2), pad.left + chartW * index / 2, height - 10));
   drawCrosshair(state, ctx);
 }
-function showTooltip(state, event) {
+function showCrosshair(state, event) {
   const rect = state.canvas.getBoundingClientRect(); const x = event.clientX - rect.left; const pointerY = event.clientY - rect.top; const geometry = state.chartGeometry;
-  if (!geometry || x < geometry.pad.left || x > geometry.width - geometry.pad.right || pointerY < geometry.pad.top || pointerY > geometry.height - geometry.pad.bottom) { state.crosshair = null; state.tooltip.classList.remove("visible"); drawChart(state); return; }
-  const nearest = state.drawnLines?.reduce((best, line) => !best || Math.abs(line.x - x) < Math.abs(best.x - x) ? line : best, null); if (!nearest) return;
-  state.crosshair = { x, y: pointerY, time: nearest.time }; drawChart(state);
-  const change = ((nearest.close / nearest.open - 1) * 100) || 0;
-  state.tooltip.innerHTML = `<b>${timeText(nearest.time, state.interval)}</b><br>시가 ${formatNumber(nearest.open, decimalsFor(state.item.symbol))} · 종가 ${formatNumber(nearest.close, decimalsFor(state.item.symbol))}<br><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}%</span>`;
-  state.tooltip.style.left = `${Math.min(rect.width - 180, Math.max(8, x + 12))}px`; state.tooltip.style.top = `${Math.max(55, event.clientY - rect.top - 58)}px`; state.tooltip.classList.add("visible");
+  if (!geometry || x < geometry.pad.left || x > geometry.width - geometry.pad.right || pointerY < geometry.pad.top || pointerY > geometry.height - geometry.pad.bottom) { state.crosshair = null; drawChart(state); return; }
+  state.crosshair = { x, y: pointerY }; drawChart(state);
 }
 async function fetchJson(path) { const response = await fetch(`${apiBase}${path}`, { cache: "no-store" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json(); }
+function providerLabel(source = "") {
+  if (/^kis/i.test(source)) return "KIS";
+  if (/naver/i.test(source)) return "네이버";
+  if (/yahoo/i.test(source)) return "Yahoo";
+  return source ? "대체 시세" : "확인 중";
+}
+function updateSourceIndicator(payload) {
+  if (!sourceIndicator) return;
+  const label = providerLabel(payload?.source); sourceIndicator.querySelector("span").textContent = label; sourceIndicator.className = `source-indicator ${payload?.source ? "live" : ""}`; sourceIndicator.title = `${label} 시세 연결됨`;
+}
 function updateQuote(state, payload) {
   const latest = payload.series?.[payload.series.length - 1]; const price = Number(payload.price || latest?.close); const change = Number(payload.changePercent ?? payload.changeRate ?? ((price / Number(payload.previousClose) - 1) * 100)); const up = change >= 0;
   const priceEl = state.card.querySelector(".last-price"); priceEl.textContent = formatNumber(price, payload.decimals ?? decimalsFor(state.item.symbol)); priceEl.className = `last-price ${up ? "up" : "down"}`; const changeEl = state.card.querySelector(".last-change"); changeEl.textContent = Number.isFinite(change) ? `${up ? "+" : ""}${change.toFixed(2)}%` : "--"; changeEl.className = `last-change ${up ? "up" : "down"}`;
   state.card.querySelector(".market-status").textContent = "";
+  if (isKorean(state.item.symbol)) updateSourceIndicator(payload);
 }
 function showSignalAlert(state, kind, time) {
   const alert = state.alert;
@@ -246,9 +262,23 @@ function evaluateSignals(state) {
 }
 async function refreshChart(state, showLoading = false) {
   if (state.loading) return; state.loading = true; if (showLoading) state.loadingEl.classList.add("visible");
-  try { const params = new URLSearchParams({ symbol: state.item.symbol, name: state.item.name, interval: state.interval, limit: String(state.limit), mode: sessionMode }); const payload = await fetchJson(`/chart?${params}`); const rows = (payload.series || []).filter((row) => Number.isFinite(Number(row.close))).slice(-state.limit); if (!rows.length) throw new Error("empty series"); state.rows = rows; state.macdValues = macd(rows); state.crosshair = null; updateChartGeometry(state); drawChart(state); updateQuote(state, payload); evaluateSignals(state); state.card.classList.remove("error"); }
+  try { const calculationLimit = isIntraday(state.interval) ? Math.min(3500, state.limit * 5) : state.limit; const params = new URLSearchParams({ symbol: state.item.symbol, name: state.item.name, interval: state.interval, limit: String(calculationLimit), mode: sessionMode }); const payload = await fetchJson(`/chart?${params}`); const rows = (payload.series || []).filter((row) => Number.isFinite(Number(row.close))); if (!rows.length) throw new Error("empty series"); state.rows = rows; state.calculationLimit = calculationLimit; state.macdValues = macd(rows); state.crosshair = null; updateChartGeometry(state); drawChart(state); updateQuote(state, payload); evaluateSignals(state); state.card.classList.remove("error"); }
   catch (error) { state.card.classList.add("error"); state.card.querySelector(".market-status").textContent = "데이터 재시도 중"; console.warn("Chart refresh failed", error); }
   finally { state.loading = false; state.loadingEl.classList.remove("visible"); }
+}
+function applyLiveQuote(state, payload) {
+  if (!isIntraday(state.interval) || !state.rows.length) return;
+  const seconds = { "1m": 60, "3m": 180, "5m": 300, "10m": 600, "15m": 900, "30m": 1800, "60m": 3600 }[state.interval] || 60;
+  const price = Number(payload.price); const quoteTime = Number(payload.marketTime || payload.asOf); if (!Number.isFinite(price) || !Number.isFinite(quoteTime)) return;
+  const bucketTime = Math.floor(quoteTime / seconds) * seconds; const rows = state.rows.slice(); const last = rows.at(-1); if (bucketTime < Number(last.time)) return;
+  if (bucketTime === Number(last.time)) rows[rows.length - 1] = { ...last, high: Math.max(Number(last.high), price), low: Math.min(Number(last.low), price), close: price };
+  else rows.push({ time: bucketTime, open: Number(last.close), high: Math.max(Number(last.close), price), low: Math.min(Number(last.close), price), close: price, volume: 0 });
+  state.rows = rows.slice(-(state.calculationLimit || state.limit)); state.macdValues = macd(state.rows); updateChartGeometry(state); drawChart(state); evaluateSignals(state);
+}
+async function refreshLiveQuote(state) {
+  if (state.loading) return;
+  try { const payload = await fetchJson(`/quote?symbol=${encodeURIComponent(state.item.symbol)}&mode=${sessionMode}`); updateQuote(state, payload); applyLiveQuote(state, payload); }
+  catch { /* the full chart refresh remains the fallback */ }
 }
 function renderTimeframes(state) {
   const holder = state.card.querySelector(".timeframe-buttons"); holder.replaceChildren(...TIMEFRAMES.map(([label, value]) => { const button = document.createElement("button"); button.type = "button"; button.className = `tf-button ${state.interval === value ? "active" : ""}`; button.textContent = label; button.addEventListener("click", () => { state.interval = value; state.limit = defaultLimit(value); state.viewOffset = 0; state.previousMacdSign = null; state.pendingTwoLineAlert = null; state.card.querySelector(".period-input").value = state.limit; renderTimeframes(state); refreshChart(state, true); }); return button; }));
@@ -257,7 +287,7 @@ function renderChartTypes(state) {
   const holder = state.card.querySelector(".chart-type-buttons");
   holder.replaceChildren(...CHART_TYPES.map(([label, value]) => {
     const button = document.createElement("button"); button.type = "button"; button.className = `chart-type-button ${state.chartType === value ? "active" : ""}`; button.textContent = label;
-    button.addEventListener("click", () => { state.chartType = value; state.viewOffset = 0; updateChartGeometry(state); state.card.querySelector(".chart-note").firstChild.textContent = `${label} · MACD 양수 `; renderChartTypes(state); drawChart(state); });
+    button.addEventListener("click", () => { state.chartType = value; state.viewOffset = 0; updateChartGeometry(state); state.card.querySelector(".chart-note").firstChild.textContent = `${label} · MACD 양수 `; state.canvas.setAttribute("aria-label", label); renderChartTypes(state); drawChart(state); });
     return button;
   }));
 }
@@ -267,17 +297,23 @@ async function suggestSymbols(state, query) {
 }
 function createCard(item, index) {
   const card = template.content.firstElementChild.cloneNode(true); chartGrid.append(card);
-  const state = { item, card, canvas: card.querySelector("canvas"), tooltip: card.querySelector(".price-tooltip"), loadingEl: card.querySelector(".loading"), alert: card.querySelector(".signal-alert"), interval: "1d", limit: 120, chartType: "three-line", rows: [], lines: [], threeLines: [], pnfColumns: [], macdValues: [], drawnLines: [], viewOffset: 0, maxViewOffset: 0, crosshair: null, chartGeometry: null, previousMacdSign: null, pendingTwoLineAlert: null };
+  const state = { item, card, canvas: card.querySelector("canvas"), loadingEl: card.querySelector(".loading"), alert: card.querySelector(".signal-alert"), interval: "1d", limit: 120, chartType: "three-line", rows: [], lines: [], threeLines: [], pnfColumns: [], macdValues: [], drawnLines: [], viewOffset: 0, maxViewOffset: 0, crosshair: null, chartGeometry: null, previousMacdSign: null, pendingTwoLineAlert: null };
   card.querySelector(".symbol-input").value = item.name; card.querySelector(".symbol-code").textContent = `티커 ${tickerFor(item.symbol)}`;
-  state.canvas.addEventListener("pointermove", (event) => { if (state.dragStartX != null) { const delta = state.dragStartX - event.clientX; const step = Math.max(4, state.canvas.clientWidth / 100); state.viewOffset = Math.min(state.maxViewOffset, Math.max(0, state.dragOriginOffset + Math.round(delta / step))); state.crosshair = null; state.tooltip.classList.remove("visible"); drawChart(state); return; } showTooltip(state, event); });
-  state.canvas.addEventListener("pointerdown", (event) => { state.dragStartX = event.clientX; state.dragOriginOffset = state.viewOffset; state.crosshair = null; state.canvas.setPointerCapture(event.pointerId); state.tooltip.classList.remove("visible"); drawChart(state); });
+  state.canvas.addEventListener("pointermove", (event) => { if (state.dragStartX != null) { const delta = state.dragStartX - event.clientX; const step = Math.max(4, state.canvas.clientWidth / 100); state.viewOffset = Math.min(state.maxViewOffset, Math.max(0, state.dragOriginOffset + Math.round(delta / step))); state.crosshair = null; drawChart(state); return; } showCrosshair(state, event); });
+  state.canvas.addEventListener("pointerdown", (event) => { state.dragStartX = event.clientX; state.dragOriginOffset = state.viewOffset; state.crosshair = null; state.canvas.setPointerCapture(event.pointerId); drawChart(state); });
   state.canvas.addEventListener("pointerup", (event) => { state.dragStartX = null; state.canvas.releasePointerCapture?.(event.pointerId); });
-  state.canvas.addEventListener("pointercancel", () => { state.dragStartX = null; }); state.canvas.addEventListener("pointerleave", () => { if (state.dragStartX == null) { state.crosshair = null; state.tooltip.classList.remove("visible"); drawChart(state); } });
+  state.canvas.addEventListener("pointercancel", () => { state.dragStartX = null; }); state.canvas.addEventListener("pointerleave", () => { if (state.dragStartX == null) { state.crosshair = null; drawChart(state); } });
   const input = card.querySelector(".symbol-input"); let searchTimer; input.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => suggestSymbols(state, input.value), 180); }); input.addEventListener("focus", () => suggestSymbols(state, input.value)); input.addEventListener("blur", () => setTimeout(() => card.querySelector(".suggestions").replaceChildren(), 150));
   const period = card.querySelector(".period-input"); period.addEventListener("change", () => { state.limit = Math.min(700, Math.max(20, Number(period.value) || defaultLimit(state.interval))); period.value = state.limit; state.previousMacdSign = null; state.pendingTwoLineAlert = null; refreshChart(state, true); }); state.alert.querySelector("button").addEventListener("click", () => state.alert.classList.remove("visible")); chartState.set(index, state); renderTimeframes(state); renderChartTypes(state); refreshChart(state, true); return state;
 }
 async function refreshMarket() {
-  try { const quotes = await Promise.all(MARKET_ITEMS.map(async (item) => ({ item, quote: await fetchJson(`/quote?symbol=${encodeURIComponent(item.symbol)}&mode=${sessionMode}`) }))); marketSummary.replaceChildren(...quotes.map(({ item, quote }) => { const rate = Number(quote.changePercent ?? quote.changeRate); const up = rate >= 0; const el = document.createElement("div"); el.className = `market-item ${up ? "up" : "down"}`; el.innerHTML = `<span>${item.label}</span><strong>${formatNumber(quote.price, item.decimals)}</strong><em>${Number.isFinite(rate) ? `${up ? "+" : ""}${rate.toFixed(2)}%` : "--"}</em>`; return el; })); } catch { marketSummary.textContent = "시장 요약을 갱신 중입니다"; }
+  try { const quotes = await Promise.all(MARKET_ITEMS.map(async (item) => ({ item, quote: await fetchJson(`/quote?symbol=${encodeURIComponent(item.symbol)}&mode=${sessionMode}`) }))); marketSummary.replaceChildren(...quotes.map(({ item, quote }) => { const rate = Number(quote.changePercent ?? quote.changeRate); const up = rate >= 0; const status = quote.marketStatus === "장중" ? "장중" : "장종료"; const el = document.createElement("div"); el.className = `market-item ${up ? "up" : "down"}`; el.innerHTML = `<span>${item.label}</span><strong>${formatNumber(quote.price, item.decimals)}</strong><em>${Number.isFinite(rate) ? `${up ? "+" : ""}${rate.toFixed(2)}%` : "--"}</em><small class="${status === "장중" ? "open" : ""}">${status}</small>`; return el; })); } catch { marketSummary.textContent = "시장 요약을 갱신 중입니다"; }
 }
 document.querySelectorAll(".session-button").forEach((button) => button.addEventListener("click", () => { sessionMode = button.dataset.mode; localStorage.setItem(SESSION_MODE_KEY, sessionMode); document.querySelectorAll(".session-button").forEach((item) => item.classList.toggle("active", item === button)); refreshMarket(); chartState.forEach((state) => refreshChart(state, true)); }));
-const states = loadSavedCharts().map(createCard); const resizeObserver = new ResizeObserver(() => chartState.forEach(drawChart)); resizeObserver.observe(chartGrid); refreshMarket(); setInterval(() => { refreshMarket(); chartState.forEach((state) => refreshChart(state)); }, REFRESH_MS); window.addEventListener("focus", () => { refreshMarket(); states.forEach((state) => refreshChart(state)); });
+async function startRefreshLoops(states) {
+  let liveRefreshMs = REFRESH_MS;
+  try { const health = await fetchJson("/health"); if (health.kis?.enabled) liveRefreshMs = 3_000; } catch { /* Vercel/public mode keeps the 30-second cadence */ }
+  setInterval(() => states.forEach((state) => refreshChart(state)), REFRESH_MS);
+  setInterval(() => { refreshMarket(); states.forEach((state) => refreshLiveQuote(state)); }, liveRefreshMs);
+}
+const states = loadSavedCharts().map(createCard); const resizeObserver = new ResizeObserver(() => chartState.forEach(drawChart)); resizeObserver.observe(chartGrid); refreshMarket(); startRefreshLoops(states); window.addEventListener("focus", () => { refreshMarket(); states.forEach((state) => refreshChart(state)); });

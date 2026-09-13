@@ -10,7 +10,8 @@
   <body>
     <div class="app">
       <header class="app-header">
-        <div class="brand"><strong>stock12</strong><span>삼선전환도</span><small>MACD 배경</small></div>
+        <div class="brand"><strong>stock12</strong></div>
+        <div class="source-indicator" id="sourceIndicator" title="시세 제공처 확인 중"><i></i><span>확인 중</span></div>
         <div class="market-summary" id="marketSummary" aria-label="시장 요약"></div>
         <div class="session-toggle" aria-label="한국 시장 구분">
           <button type="button" class="session-button active" data-mode="KRX">KRX</button>
@@ -41,7 +42,6 @@
           <span class="signal-alert-message"></span>
           <button type="button">확인</button>
         </div>
-        <div class="price-tooltip" role="tooltip"></div>
         <div class="loading">불러오는 중</div>
       </section>
     </template>
