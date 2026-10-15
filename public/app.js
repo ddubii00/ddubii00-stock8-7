@@ -623,7 +623,7 @@ function renderLegend(state, payload) {
   if (!isSymbolEditing(state)) {
     card.querySelector(".symbol-input").value = payload.name || payload.symbol;
   }
-  card.querySelector(".symbol-code").textContent = payload.symbol;
+  card.querySelector(".symbol-input").title = payload.name || payload.symbol;
   const priceEl = card.querySelector(".last-price");
   priceEl.textContent = formatNumber(payload.price ?? last?.close, decimals);
   priceEl.className = `last-price ${direction}`;
@@ -978,8 +978,23 @@ function renderMarketItem(item, quote) {
   const delta = Number.isFinite(rounded) ? `${rounded > 0 ? "+" : ""}${formatNumber(rounded === 0 ? 0 : rounded, 0)}` : "--";
   const span = document.createElement("span");
   span.className = `market-item ${direction}`;
+  span.dataset.symbol = item.symbol;
   span.innerHTML = `<span class="market-label">${item.label}</span><strong>${formatNumber(quote.price, item.decimals)}</strong><span class="market-delta" title="등락폭">${delta}</span><span class="market-change">(${formatChange(change, 2)})</span><span class="market-session ${direction}">${status}</span>`;
   return span;
+}
+
+function fitMarketNumbers() {
+  for (const field of marketSummary.querySelectorAll("strong, .market-delta, .market-change")) {
+    const range = document.createRange();
+    range.selectNodeContents(field);
+    const textWidth = range.getBoundingClientRect().width;
+    const available = field.clientWidth - 1;
+    // Rare large values fit the same fixed slot without shifting the header.
+    if (available > 0 && textWidth > available) {
+      const fontSize = parseFloat(getComputedStyle(field).fontSize);
+      field.style.fontSize = `${fontSize * available / textWidth}px`;
+    }
+  }
 }
 
 async function loadMarketSummary() {
@@ -999,6 +1014,7 @@ async function loadMarketSummary() {
         .filter(({ quote }) => quote && Number.isFinite(Number(quote.price)))
         .map(({ item, quote }) => renderMarketItem(item, quote))
     );
+    fitMarketNumbers();
   } finally {
     marketRefreshInFlight = false;
   }

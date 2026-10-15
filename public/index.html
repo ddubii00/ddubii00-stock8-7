@@ -36,6 +36,12 @@
         <canvas class="macd-bg" aria-label="MACD 배경"></canvas>
         <div class="chart-stage" aria-label="주가 차트. 오른쪽 가격 눈금을 위아래로 드래그하면 Y축 범위 조절, 더블클릭하면 자동 범위 복원"></div>
         <div class="card-controls" aria-label="차트 설정">
+          <div class="symbol-block">
+            <div class="symbol-search">
+              <input class="symbol-input" type="search" autocomplete="off" spellcheck="false" aria-label="종목 검색">
+              <div class="suggestions" role="listbox"></div>
+            </div>
+          </div>
           <div class="timeframe-buttons"></div>
           <label class="period-control">
             <span>조회기간</span>
@@ -43,13 +49,6 @@
           </label>
         </div>
         <div class="chart-overlay">
-          <div class="symbol-block">
-            <div class="symbol-search">
-              <input class="symbol-input" type="search" autocomplete="off" spellcheck="false" aria-label="종목 검색">
-              <div class="suggestions" role="listbox"></div>
-            </div>
-            <span class="symbol-code">--</span>
-          </div>
           <div class="quote-tools" role="group" aria-label="주가, 이평선 범례와 선 도구">
             <div class="ohlc-legend">
               <span class="last-price">--</span>

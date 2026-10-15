@@ -59,7 +59,7 @@ body {
   max-width: 100%;
   align-items: center;
   justify-content: space-between;
-  gap: 3px 10px;
+  gap: 3px 6px;
   min-height: 32px;
   padding: 4px 12px;
   border-bottom: 1px solid var(--border);
@@ -87,20 +87,15 @@ body {
   margin: 5px 74px 0 8px;
   z-index: 9;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   flex-wrap: wrap;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 3px 6px;
   pointer-events: auto;
 }
 
 .timeframe-buttons {
-  display: flex;
-  flex: 1 1 240px;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 3px;
-  min-width: 0;
+  display: contents;
 }
 
 .tf-button {
@@ -160,7 +155,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 4px;
+  gap: 2px;
   flex: 0 1 auto;
   max-width: 100%;
   flex-wrap: nowrap;
@@ -212,10 +207,12 @@ body {
 }
 
 .market-item {
+  --market-price-width: 47px;
+  --market-delta-width: 30px;
   display: inline-flex;
   flex: 0 0 auto;
-  align-items: baseline;
-  gap: 2px;
+  align-items: center;
+  gap: 1px;
   height: 22px;
   white-space: nowrap;
   color: var(--muted);
@@ -224,21 +221,42 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.market-item[data-symbol="KRW=X"] {
+  --market-price-width: 43px;
+  --market-delta-width: 24px;
+}
+
+.market-item[data-symbol="^KQ11"] {
+  --market-price-width: 40px;
+}
+
+.market-item[data-symbol="^IXIC"] {
+  --market-price-width: 58px;
+  --market-delta-width: 40px;
+}
+
 .market-label {
   flex-shrink: 0;
 }
 
+.market-item strong,
+.market-delta,
+.market-change {
+  height: 20px;
+  line-height: 20px;
+}
+
 .market-item + .market-item::before {
   display: inline-block;
-  margin: 0 2px 0 0;
+  margin: 0 1px 0 0;
   color: #111827;
   content: "|";
 }
 
 .market-item strong {
   display: inline-block;
-  flex: 0 0 6.5ch;
-  width: 6.5ch;
+  flex: 0 0 var(--market-price-width);
+  width: var(--market-price-width);
   margin-left: 0;
   color: var(--text);
   font-size: 13px;
@@ -259,28 +277,28 @@ body {
 
 .market-change {
   display: inline-block;
-  flex: 0 0 9ch;
-  width: 9ch;
+  flex: 0 0 55px;
+  width: 55px;
   margin-left: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
 .market-delta {
-  flex: 0 0 6ch;
-  width: 6ch;
+  flex: 0 0 var(--market-delta-width);
+  width: var(--market-delta-width);
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
 .market-session {
   display: inline-flex;
-  flex: 0 0 34px;
+  flex: 0 0 30px;
   align-items: center;
   justify-content: center;
   height: 16px;
-  margin-left: 1px;
-  padding: 0 3px;
+  margin-left: 0;
+  padding: 0 1px;
   border-radius: 4px;
   background: rgba(107, 114, 128, 0.12);
   color: var(--muted);
@@ -352,33 +370,26 @@ body {
   position: relative;
   z-index: 5;
   margin: 4px 74px 0 8px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
-  align-items: start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+  align-items: center;
   pointer-events: none;
 }
 
 .symbol-block {
   display: flex;
-  flex-direction: row;
+  flex: 0 1 90px;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
   min-width: 0;
-}
-
-.symbol-code {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
+  max-width: 100%;
 }
 
 .symbol-search {
   position: relative;
   z-index: 8;
   pointer-events: auto;
-  flex: 0 1 126px;
+  flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
 }
@@ -392,7 +403,7 @@ body {
   background: rgba(255, 255, 255, 0.86);
   color: var(--text);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 800;
   line-height: 1;
   outline: none;
@@ -452,14 +463,7 @@ body {
 }
 
 .quote-tools {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-  min-height: 22px;
-  overflow: visible;
-  white-space: nowrap;
+  display: contents;
   pointer-events: auto;
 }
 
@@ -701,14 +705,12 @@ body {
   .card-controls, .chart-overlay { margin-right: 10px; }
   .tf-button { height: 18px; padding: 0 3px; font-size: 10px; }
   .symbol-input { height: 22px; font-size: 13px; }
-  .symbol-code { font-size: 10px; }
   .last-price { font-size: 14px; }
-  .quote-tools { gap: 4px; }
 }
 
 @container (max-width: 130px) {
+  .symbol-block { flex-basis: max(24px, calc(100cqw - 52px)); }
   .tf-button { height: 16px; padding: 0 2px; font-size: 9px; }
-  .timeframe-buttons { gap: 2px; }
   .period-control { font-size: 9px; gap: 2px; }
   .period-control input { width: 44px; height: 18px; font-size: 10px; }
   .last-price { font-size: 12px; }
@@ -721,14 +723,11 @@ body {
 
 @container (max-height: 150px) {
   .card-controls { margin-top: 3px; gap: 2px 4px; }
-  .timeframe-buttons { flex-basis: 160px; gap: 2px; }
   .tf-button { height: 16px; padding: 0 2px; font-size: 9px; }
   .period-control { gap: 3px; font-size: 9px; }
   .period-control input { width: 42px; height: 16px; font-size: 10px; }
   .chart-overlay { margin-top: 2px; gap: 2px; }
   .symbol-input { height: 18px; font-size: 12px; }
-  .symbol-code { font-size: 9px; }
-  .quote-tools { gap: 2px 5px; }
   .ohlc-legend { gap: 3px; }
   .last-price { font-size: 12px; }
   .last-change { font-size: 10px; }
