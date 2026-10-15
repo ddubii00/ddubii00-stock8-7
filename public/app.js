@@ -174,19 +174,24 @@ function applySharedState(value) {
   }
 }
 
+function disposeCard(state) {
+  state.disposed = true;
+  state.requestId = (state.requestId || 0) + 1;
+  state.trendEditor?.destroy();
+  state.instance.observer.disconnect();
+  state.instance.chart.remove();
+  chartState.delete(state.card.dataset.cardId);
+  state.card.remove();
+}
+
 async function renderPage() {
-  for (const state of chartState.values()) {
-    state.disposed = true;
-    state.requestId = (state.requestId || 0) + 1;
-    state.trendEditor?.destroy();
-    state.instance.observer.disconnect();
-    state.instance.chart.remove();
-  }
+  for (const state of chartState.values()) disposeCard(state);
   chartState.clear();
   chartGrid.replaceChildren();
   document.querySelector("#pageIndicator").textContent = `${activePage + 1} / ${PAGE_COUNT}`;
   const start = activePage * SLOTS_PER_PAGE;
-  await Promise.all(sharedState.slots.slice(start, start + SLOTS_PER_PAGE).map((slot, index) => createCard(slot, start + index)));
+  const count = LAYOUTS[layoutIndex] === "2x2" ? SLOTS_PER_PAGE : 3;
+  await Promise.all(sharedState.slots.slice(start, start + count).map((slot, index) => createCard(slot, start + index)));
   fitChartsToSlots();
 }
 
@@ -1079,6 +1084,13 @@ sessionButtons.forEach((button) => {
 document.querySelector("#layoutButton").addEventListener("click", () => {
   layoutIndex = (layoutIndex + 1) % LAYOUTS.length;
   chartGrid.dataset.layout = LAYOUTS[layoutIndex];
+  const fourthIndex = activePage * SLOTS_PER_PAGE + 3;
+  const fourthCard = chartState.get(`card-${fourthIndex}`);
+  if (LAYOUTS[layoutIndex] === "2x2") {
+    if (!fourthCard && sharedState) void createCard(sharedState.slots[fourthIndex], fourthIndex).then(fitChartsToSlots);
+  } else if (fourthCard) {
+    disposeCard(fourthCard);
+  }
   fitChartsToSlots();
   const button = document.querySelector("#layoutButton");
   button.title = `현재 ${LAYOUTS[layoutIndex]} (가로 × 세로). 클릭하면 다음 배치`;

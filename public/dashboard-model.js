@@ -1,6 +1,6 @@
 export const PAGE_COUNT = 5;
 export const SLOTS_PER_PAGE = 4;
-export const LAYOUTS = ['2x2', '4x1', '1x4'];
+export const LAYOUTS = ['2x2', '1x3', '3x1'];
 export const INTERVALS = ['1m', '3m', '5m', '10m', '15m', '30m', '60m', '1d', '1wk', '1mo'];
 const DEFAULTS = [
   ['000660.KS', 'SK하이닉스'], ['005930.KS', '삼성전자'], ['AVGO.US', 'Broadcom'], ['SNDK.US', 'Sandisk'],
