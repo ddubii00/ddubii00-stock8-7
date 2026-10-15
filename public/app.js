@@ -75,6 +75,26 @@ let showBollinger = true;
 let globalWeekly = false;
 let showLineBreak = false;
 let chartFitFrame = 0;
+let priceScaleFitFrame = 0;
+let priceScaleWidth = PRICE_SCALE_WIDTH;
+
+function syncPriceScaleWidths() {
+  if (priceScaleFitFrame) return;
+  priceScaleFitFrame = requestAnimationFrame(() => {
+    priceScaleFitFrame = 0;
+    const scales = [...chartState.values()]
+      .filter((state) => !state.disposed)
+      .map((state) => state.instance.chart.priceScale("right"));
+    // Share the widest label area, including prices that exceed the baseline.
+    // Keep that width when switching symbols/pages so the plot does not jump.
+    priceScaleWidth = Math.ceil(Math.max(priceScaleWidth, ...scales.map((scale) => scale.width())));
+    for (const scale of scales) {
+      if (scale.options().minimumWidth !== priceScaleWidth) {
+        scale.applyOptions({ minimumWidth: priceScaleWidth });
+      }
+    }
+  });
+}
 
 function fitChartsToSlots() {
   cancelAnimationFrame(chartFitFrame);
@@ -280,7 +300,7 @@ function createLwChart(container, state) {
     width: container.clientWidth,
     height: container.clientHeight,
     layout: {
-      backgroundColor: "transparent",
+      background: { type: LightweightCharts.ColorType.Solid, color: "transparent" },
       textColor: "#172033",
       fontFamily: "Inter, Pretendard, sans-serif"
     },
@@ -304,7 +324,8 @@ function createLwChart(container, state) {
     rightPriceScale: {
       borderColor: "#dbe3f1",
       scaleMargins: { top: 0.19, bottom: 0.08 },
-      minimumWidth: PRICE_SCALE_WIDTH
+      minimumWidth: priceScaleWidth,
+      ticksVisible: true
     },
     timeScale: {
       borderColor: "#dbe3f1",
@@ -710,6 +731,7 @@ function applyPayload(state, payload, initial = false) {
   if (initial || isIntraday(state.interval)) keepLatestVisible(state);
   requestAnimationFrame(() => drawMacdBackground(state));
   state.card.classList.add("loaded");
+  syncPriceScaleWidths();
   state.trendEditor?.schedule();
 }
 
@@ -953,7 +975,10 @@ async function createCard(item, index) {
   };
   state.instance = createLwChart(stage, state);
   state.instance.chart.timeScale().subscribeVisibleLogicalRangeChange(() => drawMacdBackground(state));
-  state.instance.chart.timeScale().subscribeSizeChange(() => drawMacdBackground(state));
+  state.instance.chart.timeScale().subscribeSizeChange(() => {
+    drawMacdBackground(state);
+    syncPriceScaleWidths();
+  });
   state.instance.chart.subscribeCrosshairMove((param) => showTooltip(state, param));
 
   chartState.set(id, state);
