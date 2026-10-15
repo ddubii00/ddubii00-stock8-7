@@ -1,12 +1,8 @@
 import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly } from "./chart-indicators.js";
 import { calculateThreeLineBreak } from "./three-line-break.js";
-
-const INITIAL_CHARTS = [
-  { symbol: "000660.KS", name: "SK하이닉스", decimals: 0 },
-  { symbol: "005930.KS", name: "삼성전자", decimals: 0 },
-  { symbol: "AVGO.US", name: "Broadcom", decimals: 2 },
-  { symbol: "SNDK.US", name: "Sandisk", decimals: 2 }
-];
+import { SharedDashboard } from "./shared-dashboard.js";
+import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS } from "./dashboard-model.js";
+import { TrendEditor } from "./trend-editor.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -28,7 +24,6 @@ const MARKET_ITEMS = [
   { label: "나스닥", symbol: "^IXIC", decimals: 2 }
 ];
 
-const DEFAULT_INTERVAL = "1d";
 const DEFAULT_LIMIT = 120;
 const MAX_LIMIT = 700;
 const DEFAULT_LIMIT_BY_INTERVAL = {
@@ -45,6 +40,10 @@ const DEFAULT_LIMIT_BY_INTERVAL = {
 };
 const STORAGE_KEY = "stock8.selectedCharts.v2";
 const SESSION_MODE_KEY = "stock8.sessionMode.v1";
+let activePage = 0;
+let layoutIndex = 0;
+let sharedState;
+const shared = new SharedDashboard(applySharedState, showSaveStatus);
 const WARMUP_BARS = Math.max(...MA_PERIODS);
 const CHART_PRICE_DECIMALS = 0;
 const UPDATE_INTERVAL_MS = 1_000;
@@ -110,25 +109,59 @@ function priceFormatForSymbol(symbol) {
   return { type: "price", precision, minMove: precision === 2 ? 0.01 : 1 };
 }
 
-function loadSavedCharts() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    if (!Array.isArray(parsed) || parsed.length !== INITIAL_CHARTS.length) return INITIAL_CHARTS;
-    return parsed.map((item, index) => ({
-      symbol: String(item.symbol || INITIAL_CHARTS[index].symbol).toUpperCase(),
-      name: String(item.name || INITIAL_CHARTS[index].name),
-      decimals: Number.isFinite(Number(item.decimals)) ? Number(item.decimals) : INITIAL_CHARTS[index].decimals
-    }));
-  } catch {
-    return INITIAL_CHARTS;
+function showSaveStatus(status, message = "") {
+  const root = document.querySelector("#saveStatus");
+  root.dataset.status = status;
+  root.textContent = status === "error" ? "저장 연결 오류" : status === "saving" ? "저장 중" : "저장됨";
+  root.title = message || "종목과 선 정보를 서버에 저장합니다.";
+}
+
+function persistSlot(state, patch) {
+  shared.change([{ type: "slot", index: state.slotIndex, patch }]);
+}
+
+function applySharedState(value) {
+  const first = !sharedState;
+  sharedState = value;
+  if (first) { void renderPage(); return; }
+  for (const state of chartState.values()) {
+    if (state.disposed) continue;
+    const slot = value.slots[state.slotIndex];
+    if (!isSymbolEditing(state)) {
+      const interval = globalWeekly && !state.weeklyLocal ? "1wk" : slot.interval;
+      const limit = globalWeekly && !state.weeklyLocal ? state.limit : slot.limit;
+      const changed = state.item.symbol !== slot.symbol || state.interval !== interval || state.limit !== limit;
+      const symbolChanged = state.item.symbol !== slot.symbol;
+      state.item = { symbol: slot.symbol, name: slot.name, decimals: slot.decimals };
+      state.restoreInterval = slot.interval;
+      state.restoreLimit = slot.limit;
+      state.interval = interval;
+      state.limit = limit;
+      if (changed) {
+        if (symbolChanged) state.trendEditor?.reset();
+        state.card.querySelector(".symbol-input").value = slot.name;
+        state.card.querySelector(".period-input").value = String(limit);
+        renderTimeframeButtons(state.card, state);
+        void refreshCard(state, true);
+      }
+    }
+    state.trendEditor?.schedule();
   }
 }
 
-function saveCharts() {
-  const items = [...chartState.values()].map((state) => state.item);
-  if (items.length === INITIAL_CHARTS.length) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+async function renderPage() {
+  for (const state of chartState.values()) {
+    state.disposed = true;
+    state.requestId = (state.requestId || 0) + 1;
+    state.trendEditor?.destroy();
+    state.instance.observer.disconnect();
+    state.instance.chart.remove();
   }
+  chartState.clear();
+  chartGrid.replaceChildren();
+  document.querySelector("#pageIndicator").textContent = `${activePage + 1} / ${PAGE_COUNT}`;
+  const start = activePage * SLOTS_PER_PAGE;
+  await Promise.all(sharedState.slots.slice(start, start + SLOTS_PER_PAGE).map((slot, index) => createCard(slot, start + index)));
 }
 
 function updateSessionButtons() {
@@ -252,11 +285,12 @@ function createLwChart(container, state) {
     }
   });
 
-  new ResizeObserver((entries) => {
+  const observer = new ResizeObserver((entries) => {
     if (!entries.length) return;
     const { width, height } = entries[0].contentRect;
     chart.applyOptions({ width, height });
-  }).observe(container);
+  });
+  observer.observe(container);
 
   const candleSeries = chart.addCandlestickSeries({
     upColor: "#d92c2c",
@@ -293,7 +327,7 @@ function createLwChart(container, state) {
       priceFormat
     });
   }
-  return { chart, candleSeries, maSeries, bbSeries };
+  return { chart, candleSeries, maSeries, bbSeries, observer };
 }
 
 function rowByTime(state, time) {
@@ -457,7 +491,7 @@ function isViewAtLatest(state) {
 
 function drawMacdBackground(state) {
   const { bgCanvas, rows, macd, instance } = state;
-  if (!bgCanvas) return;
+  if (state.disposed || !bgCanvas) return;
   const rect = bgCanvas.getBoundingClientRect();
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   const width = Math.max(1, Math.floor(rect.width * dpr));
@@ -644,6 +678,7 @@ function applyPayload(state, payload, initial = false) {
   if (initial || isIntraday(state.interval)) keepLatestVisible(state);
   requestAnimationFrame(() => drawMacdBackground(state));
   state.card.classList.add("loaded");
+  state.trendEditor?.schedule();
 }
 
 async function fetchChart(state) {
@@ -664,6 +699,7 @@ function chartRequestKey(state) {
 }
 
 async function refreshCard(state, initial = false) {
+  if (state.disposed) return;
   const key = chartRequestKey(state);
   if (!initial && state.pendingKey === key) return;
   const requestId = state.requestId = (state.requestId || 0) + 1;
@@ -674,7 +710,7 @@ async function refreshCard(state, initial = false) {
   }
   try {
     const payload = await fetchChart(state);
-    if (requestId !== state.requestId || key !== chartRequestKey(state)) return;
+    if (state.disposed || requestId !== state.requestId || key !== chartRequestKey(state)) return;
     state.item = {
       symbol: payload.symbol,
       name: payload.name,
@@ -682,7 +718,7 @@ async function refreshCard(state, initial = false) {
     };
     applyPayload(state, payload, initial);
   } catch {
-    if (requestId === state.requestId && key === chartRequestKey(state)) {
+    if (!state.disposed && requestId === state.requestId && key === chartRequestKey(state)) {
       state.card.querySelector(".loading").textContent = "데이터 오류";
     }
   } finally {
@@ -705,10 +741,11 @@ async function selectSearchItem(card, item) {
     decimals: item.symbol.endsWith(".KS") || item.symbol.endsWith(".KQ") ? 0 : 2
   };
   state.isEditingSymbol = false;
+  state.trendEditor?.reset();
   input.value = item.name;
   input.blur();
   closeSuggestions(card);
-  saveCharts();
+  persistSlot(state, state.item);
   await refreshCard(state, true);
 }
 
@@ -726,7 +763,7 @@ async function showSuggestions(card, query) {
   suggestions.classList.remove("open");
   const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(query)}`);
   const json = await response.json();
-  if (requestId !== state.searchRequest || card.querySelector(".symbol-input").value !== query) return;
+  if (state.disposed || requestId !== state.searchRequest || card.querySelector(".symbol-input").value !== query) return;
   const manualItem = manualSearchItem(query);
   const results = [...(json.results || [])];
   if (manualItem && !results.some((item) => item.symbol === manualItem.symbol)) results.push(manualItem);
@@ -808,12 +845,13 @@ function bindSearch(card) {
     setTimeout(() => {
       closeSuggestions(card);
       state.isEditingSymbol = false;
+      if (sharedState && !state.disposed) applySharedState(sharedState);
     }, 240);
   });
 }
 
 function bindLegend(card, state) {
-  card.querySelectorAll(".ma-legend button").forEach((button) => {
+  card.querySelectorAll(".ma-legend button[data-series]").forEach((button) => {
     button.addEventListener("click", () => {
       const key = button.dataset.series;
       state.visible[key] = !state.visible[key];
@@ -838,9 +876,12 @@ function renderTimeframeButtons(card, state) {
         if (globalWeekly) {
           state.restoreInterval = state.interval;
           state.restoreLimit = state.limit;
+          state.weeklyLocal = true;
         }
         card.querySelector(".period-input").value = String(state.limit);
         renderTimeframeButtons(card, state);
+        state.trendEditor?.reset();
+        persistSlot(state, { interval: state.interval, limit: state.limit });
         await refreshCard(state, true);
       });
       return button;
@@ -852,10 +893,11 @@ function bindPeriod(card, state) {
   const input = card.querySelector(".period-input");
   input.value = String(state.limit);
   const apply = async () => {
-    const next = Math.min(MAX_LIMIT, Math.max(minimumLimitForInterval(state.interval), Number(input.value || DEFAULT_LIMIT)));
+    const next = Math.min(MAX_LIMIT, Math.max(minimumLimitForInterval(state.interval), Math.trunc(Number(input.value || DEFAULT_LIMIT))));
     input.value = String(next);
     state.limit = next;
     if (globalWeekly && state.restoreInterval === state.interval) state.restoreLimit = next;
+    if (!globalWeekly || state.weeklyLocal) persistSlot(state, { limit: next });
     await refreshCard(state, true);
   };
   input.addEventListener("change", apply);
@@ -871,16 +913,19 @@ async function createCard(item, index) {
   const bgCanvas = fragment.querySelector(".macd-bg");
   const id = `card-${index}`;
   card.dataset.cardId = id;
+  card.tabIndex = -1;
   chartGrid.append(card);
 
   const state = {
     card,
     bgCanvas,
-    item,
-    interval: globalWeekly ? "1wk" : DEFAULT_INTERVAL,
-    restoreInterval: DEFAULT_INTERVAL,
-    restoreLimit: DEFAULT_LIMIT,
-    limit: DEFAULT_LIMIT,
+    item: {symbol:item.symbol, name:item.name, decimals:item.decimals},
+    slotIndex: index,
+    interval: globalWeekly ? "1wk" : item.interval,
+    restoreInterval: item.interval,
+    restoreLimit: item.limit,
+    weeklyLocal: false,
+    limit: globalWeekly ? defaultLimitForInterval("1wk") : item.limit,
     sourceRows: [],
     rows: [],
     macd: [],
@@ -902,7 +947,7 @@ async function createCard(item, index) {
 
   chartState.set(id, state);
   bindSearch(card);
-  card.querySelectorAll(".ma-legend button").forEach((button) => {
+  card.querySelectorAll(".ma-legend button[data-series]").forEach((button) => {
     button.setAttribute("aria-pressed", String(state.visible[button.dataset.series]));
     const period = Number(button.dataset.series.replace("ma", ""));
     if (MA_COLORS[period]) {
@@ -913,6 +958,7 @@ async function createCard(item, index) {
   bindLegend(card, state);
   renderTimeframeButtons(card, state);
   bindPeriod(card, state);
+  state.trendEditor = new TrendEditor(state, () => sharedState.lines[state.item.symbol] || [], (changes) => shared.change(changes));
   await refreshCard(state, true);
 }
 
@@ -976,12 +1022,15 @@ document.querySelectorAll(".chart-toggle").forEach((button) => {
         local.setAttribute("aria-pressed", String(showBollinger));
         updateBollinger(state);
       } else if (feature === "weekly") {
+        state.weeklyLocal = false;
+        state.trendEditor?.reset();
         setWeekly(state, globalWeekly);
         if (globalWeekly) state.limit = defaultLimitForInterval("1wk");
         state.card.querySelector(".period-input").value = String(state.limit);
         renderTimeframeButtons(state.card, state);
         await refreshCard(state, true);
       } else if (state.lastPayload && state.lastPayloadKey === chartRequestKey(state)) {
+        state.trendEditor?.reset();
         applyPayload(state, state.lastPayload, true);
       }
       requestAnimationFrame(() => drawMacdBackground(state));
@@ -1000,8 +1049,37 @@ sessionButtons.forEach((button) => {
   });
 });
 
+document.querySelector("#layoutButton").addEventListener("click", () => {
+  layoutIndex = (layoutIndex + 1) % LAYOUTS.length;
+  chartGrid.dataset.layout = LAYOUTS[layoutIndex];
+  const button = document.querySelector("#layoutButton");
+  button.title = `현재 ${LAYOUTS[layoutIndex]} (가로 × 세로). 클릭하면 다음 배치`;
+  button.setAttribute("aria-label", `배치 ${LAYOUTS[layoutIndex]}`);
+});
+document.querySelector("#nextButton").addEventListener("click", () => {
+  activePage = (activePage + 1) % PAGE_COUNT;
+  void renderPage();
+});
+
 updateSessionButtons();
-await Promise.all([loadMarketSummary(), ...loadSavedCharts().map(createCard)]);
+try {
+  await shared.start();
+  if (!shared.state.initialized) {
+    try {
+      const legacy = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+      if (Array.isArray(legacy) && legacy.length === 4) shared.change([{type:"importLegacy", items:legacy}]);
+    } catch { /* Invalid legacy browser state must not replace server data. */ }
+  }
+  showSaveStatus(shared.pending.length ? "saving" : "saved");
+  void loadMarketSummary();
+} catch (error) {
+  showSaveStatus("error", error.message);
+  const retry = document.createElement("button");
+  retry.className = "load-retry";
+  retry.textContent = "저장 정보를 불러오지 못했습니다. 다시 시도";
+  retry.addEventListener("click", () => location.reload());
+  chartGrid.replaceChildren(retry);
+}
 
 setInterval(loadMarketSummary, UPDATE_INTERVAL_MS);
 setInterval(() => {

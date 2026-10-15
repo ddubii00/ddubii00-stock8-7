@@ -2,9 +2,14 @@ import "dotenv/config";
 import { createEtfSearch } from "./lib/etf-search.js";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { extname, join, normalize } from "node:path";
+import { extname, join, normalize, resolve } from "node:path";
+import { createDashboardStore } from "./lib/dashboard-store.js";
+import { createAuth, readJsonBody } from "./lib/auth.js";
 
 const PORT = Number(process.env.PORT || 8000);
+const DATA_DIR = resolve(process.env.STOCK8_DATA_DIR || "data");
+const dashboardStore = await createDashboardStore(DATA_DIR);
+const auth = await createAuth(DATA_DIR, process.env.STOCK8_PASSWORD || "1222");
 const PUBLIC_DIR = join(process.cwd(), "public");
 const KIS_APP_KEY = process.env.KIS_APP_KEY || "";
 const KIS_APP_SECRET = process.env.KIS_APP_SECRET || "";
@@ -2001,8 +2006,8 @@ async function getQuote(symbol, mode = "KRX") {
   };
 }
 
-async function sendJson(res, payload) {
-  res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+async function sendJson(res, payload, status = 200) {
+  res.writeHead(status, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
   res.end(JSON.stringify(payload));
 }
 
@@ -2020,7 +2025,7 @@ async function serveStatic(req, res) {
 
   try {
     const content = await readFile(filePath);
-    res.writeHead(200, { "Content-Type": MIME[extname(filePath)] || "application/octet-stream" });
+    res.writeHead(200, { "Content-Type": MIME[extname(filePath)] || "application/octet-stream", "Cache-Control": "no-store" });
     res.end(content);
   } catch {
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -2028,12 +2033,52 @@ async function serveStatic(req, res) {
   }
 }
 
-createServer(async (req, res) => {
+const server = createServer(async (req, res) => {
+  try {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = appPathname(url);
 
   if (pathname === "/health") {
     await sendJson(res, { status: "ok", kis: kisStatusPayload() });
+    return;
+  }
+
+  if (["POST", "PATCH", "DELETE"].includes(req.method) && req.headers.origin) {
+    if (new URL(req.headers.origin).host !== req.headers.host) {
+      await sendJson(res, { error: "다른 사이트의 요청은 허용되지 않습니다." }, 403);
+      return;
+    }
+  }
+  if (pathname === "/api/login" && req.method === "POST") {
+    const body = await readJsonBody(req, 1024);
+    const result = auth.login(req, typeof body.password === "string" ? body.password : "");
+    if (result.cookie) res.setHeader("Set-Cookie", result.cookie);
+    await sendJson(res, { ok: result.status === 200, error: result.status === 429 ? "잠시 후 다시 시도해 주세요." : result.status === 401 ? "비밀번호가 올바르지 않습니다." : undefined }, result.status);
+    return;
+  }
+  if (!auth.authorized(req)) {
+    if (pathname.startsWith("/api/")) await sendJson(res, { error: "로그인이 필요합니다." }, 401);
+    else if (["/styles.css", "/login.js"].includes(pathname)) await serveStatic(req, res);
+    else if (pathname === "/" || pathname === "/index.html") {
+      res.writeHead(200, { "Content-Type": MIME[".html"], "Cache-Control": "no-store" });
+      res.end(await readFile(join(PUBLIC_DIR, "login.html")));
+    } else { res.writeHead(401); res.end("로그인이 필요합니다."); }
+    return;
+  }
+  if (pathname === "/api/state") {
+    if (req.method === "GET") await sendJson(res, dashboardStore.get());
+    else if (req.method === "PATCH") {
+      const operation = await readJsonBody(req);
+      try { await sendJson(res, await dashboardStore.update(operation)); }
+      catch (error) {
+        if (error.code) throw error;
+        await sendJson(res, { error: error.message }, 400);
+      }
+    } else await sendJson(res, { error: "허용되지 않은 요청입니다." }, 405);
+    return;
+  }
+  if (req.method !== "GET") {
+    await sendJson(res, { error: "허용되지 않은 요청입니다." }, 405);
     return;
   }
 
@@ -2094,7 +2139,13 @@ createServer(async (req, res) => {
   }
 
   await serveStatic(req, res);
-}).listen(PORT, () => {
-  console.log(`stock8 four-candle dashboard: http://127.0.0.1:${PORT}`);
+  } catch (error) {
+    console.error("Request failed:", error.message);
+    if (!res.headersSent) await sendJson(res, { error: error.status ? error.message : "서버 요청에 실패했습니다." }, error.status || 500);
+    else res.end();
+  }
+});
+server.listen(PORT, () => {
+  console.log(`stock8 four-candle dashboard: http://127.0.0.1:${server.address().port}`);
   console.log(`KIS realtime: ${KIS_ENABLED ? "enabled" : "disabled"}`);
 });

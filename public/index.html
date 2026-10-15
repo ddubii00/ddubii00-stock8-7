@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>stock8 - 4개 캔들차트</title>
+    <title>stock8 - 주식 차트</title>
     <link rel="stylesheet" href="/stock8-7/styles.css">
   </head>
   <body>
@@ -11,6 +11,12 @@
       <header class="app-header">
         <div class="market-summary" id="marketSummary" aria-label="시장 요약"></div>
         <div class="header-actions">
+          <span id="saveStatus" class="save-status" role="status" title="서버 저장 상태">불러오는 중</span>
+          <div class="navigation-controls">
+            <button type="button" id="layoutButton" title="현재 2x2 (가로 × 세로). 클릭하면 4x1, 1x4 순으로 변경">배치</button>
+            <button type="button" id="nextButton" title="다음 차트 페이지 (5장 순환)">다음</button>
+            <span id="pageIndicator" aria-live="polite">1 / 5</span>
+          </div>
           <div class="feature-toggle" aria-label="전체 차트 설정">
             <button type="button" class="chart-toggle active" data-feature="bb" aria-pressed="true" title="전체 차트 볼린저밴드 표시/숨김 (20기간, 2 표준편차)">BB</button>
             <button type="button" class="chart-toggle" data-feature="weekly" aria-pressed="false" title="전체 주봉 전환. 끄면 이전 주기로 복원 (개별 봉 선택 가능)">주</button>
@@ -22,7 +28,7 @@
           </div>
         </div>
       </header>
-      <main class="chart-grid" id="chartGrid"></main>
+      <main class="chart-grid" id="chartGrid" data-layout="2x2"></main>
     </div>
 
     <template id="chart-card-template">
@@ -58,6 +64,11 @@
             <button type="button" data-series="ma120"><i class="ma120"></i>120</button>
             <button type="button" data-series="ma200"><i class="ma200"></i>200</button>
             <button type="button" data-series="bb" title="이 차트만 볼린저밴드 표시/숨김"><i class="bb-swatch"></i>BB</button>
+            <span class="trend-toolbar" role="group" aria-label="선 그리기">
+              <button type="button" class="draw-line" aria-pressed="false" title="누른 뒤 차트의 시작점부터 끝점까지 드래그. 같은 종목의 다른 페이지에도 공유됩니다">선</button>
+              <button type="button" class="delete-line" disabled title="선택한 선 삭제. 선택하지 않았으면 이 종목의 모든 선 삭제">선 삭제</button>
+              <button type="button" class="line-width" disabled title="선택한 선의 굵기 1 → 2 → 3">굵기</button>
+            </span>
           </div>
         </div>
         <div class="price-tooltip" role="tooltip"></div>
