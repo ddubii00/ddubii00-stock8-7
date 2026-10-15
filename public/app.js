@@ -307,6 +307,9 @@ function createLwChart(container, state) {
       secondsVisible: false,
       rightOffset: CHART_RIGHT_OFFSET,
       barSpacing: CHART_BAR_SPACING,
+      // Keep the same bars visible as the viewport or chart layout narrows.
+      lockVisibleTimeRangeOnResize: true,
+      minBarSpacing: 0.001,
       tickMarkFormatter: (time) => tickFormatter(state.interval, time)
     }
   });
@@ -662,8 +665,6 @@ function applyPayload(state, payload, initial = false) {
       },
       timeScale: {
         timeVisible: isIntraday(state.interval),
-        rightOffset: CHART_RIGHT_OFFSET,
-        barSpacing: CHART_BAR_SPACING,
         tickMarkFormatter: (time) => tickFormatter(state.interval, time)
       }
     });
