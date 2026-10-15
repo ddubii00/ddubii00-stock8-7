@@ -74,6 +74,29 @@ let sessionMode = "KRX";
 let showBollinger = true;
 let globalWeekly = false;
 let showLineBreak = false;
+let chartFitFrame = 0;
+
+function fitChartsToSlots() {
+  cancelAnimationFrame(chartFitFrame);
+  chartFitFrame = requestAnimationFrame(() => {
+    for (const state of chartState.values()) {
+      if (state.disposed) continue;
+      const stage = state.card.querySelector(".chart-stage");
+      const width = stage.clientWidth;
+      const height = stage.clientHeight;
+      if (!width || !height) continue;
+      const options = state.instance.chart.options();
+      if (options.width !== width || options.height !== height) {
+        state.instance.chart.applyOptions({ width, height });
+      }
+      drawMacdBackground(state);
+      state.trendEditor?.schedule();
+    }
+  });
+}
+
+window.addEventListener("resize", fitChartsToSlots);
+window.visualViewport?.addEventListener("resize", fitChartsToSlots);
 
 function formatNumber(value, decimals = 2) {
   const number = Number(value);
@@ -164,6 +187,7 @@ async function renderPage() {
   document.querySelector("#pageIndicator").textContent = `${activePage + 1} / ${PAGE_COUNT}`;
   const start = activePage * SLOTS_PER_PAGE;
   await Promise.all(sharedState.slots.slice(start, start + SLOTS_PER_PAGE).map((slot, index) => createCard(slot, start + index)));
+  fitChartsToSlots();
 }
 
 function updateSessionButtons() {
@@ -1038,6 +1062,7 @@ sessionButtons.forEach((button) => {
 document.querySelector("#layoutButton").addEventListener("click", () => {
   layoutIndex = (layoutIndex + 1) % LAYOUTS.length;
   chartGrid.dataset.layout = LAYOUTS[layoutIndex];
+  fitChartsToSlots();
   const button = document.querySelector("#layoutButton");
   button.title = `현재 ${LAYOUTS[layoutIndex]} (가로 × 세로). 클릭하면 다음 배치`;
   button.setAttribute("aria-label", `배치 ${LAYOUTS[layoutIndex]}`);
