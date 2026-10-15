@@ -1,3 +1,6 @@
+import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly } from "./chart-indicators.js";
+import { calculateThreeLineBreak } from "./three-line-break.js";
+
 const INITIAL_CHARTS = [
   { symbol: "000660.KS", name: "SK하이닉스", decimals: 0 },
   { symbol: "005930.KS", name: "삼성전자", decimals: 0 },
@@ -42,7 +45,6 @@ const DEFAULT_LIMIT_BY_INTERVAL = {
 };
 const STORAGE_KEY = "stock8.selectedCharts.v2";
 const SESSION_MODE_KEY = "stock8.sessionMode.v1";
-const MA_PERIODS = [5, 10, 20, 60, 120, 240];
 const WARMUP_BARS = Math.max(...MA_PERIODS);
 const CHART_PRICE_DECIMALS = 0;
 const UPDATE_INTERVAL_MS = 1_000;
@@ -60,14 +62,6 @@ const INTERVAL_SECONDS = {
   "30m": 1800,
   "60m": 3600
 };
-const MA_COLORS = {
-  5: "#d92c2c",
-  10: "#1f5bd8",
-  20: "#0a9d58",
-  60: "#e4a11b",
-  120: "#8040a0",
-  240: "#606060"
-};
 
 const chartGrid = document.querySelector("#chartGrid");
 const marketSummary = document.querySelector("#marketSummary");
@@ -77,6 +71,9 @@ const chartState = new Map();
 let marketRefreshInFlight = false;
 let chartRefreshInFlight = false;
 let sessionMode = "KRX";
+let showBollinger = true;
+let globalWeekly = false;
+let showLineBreak = false;
 
 function formatNumber(value, decimals = 2) {
   const number = Number(value);
@@ -181,20 +178,15 @@ function tickFormatter(interval, time) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function calcSma(rows, period) {
-  const result = [];
-  for (let i = 0; i < rows.length; i += 1) {
-    if (i < period - 1) continue;
-    let sum = 0;
-    for (let j = 0; j < period; j += 1) sum += rows[i - j].close;
-    result.push({ time: rows[i].time, value: sum / period });
-  }
-  return result;
+function calcVisibleSma(state, period) {
+  return calcSma(state.rows || [], period);
 }
 
-function calcVisibleSma(state, period) {
-  const visibleTimes = new Set((state.rows || []).map((row) => row.time));
-  return calcSma(state.sourceRows || state.rows || [], period).filter((row) => visibleTimes.has(row.time));
+function updateBollinger(state) {
+  const bands = state.visible.bb ? calcBollinger(state.rows || []) : [];
+  for (const key of ["upper", "middle", "lower"]) {
+    state.instance.bbSeries[key].setData(bands.map((row) => ({ time: row.time, value: row[key] })));
+  }
 }
 
 function ema(values, period) {
@@ -232,7 +224,12 @@ function createLwChart(container, state) {
       timeFormatter: (time) => tickFormatter(state.interval, time),
       priceFormatter: (price) => formatAxisPrice(price, state.item.symbol)
     },
-    handleScale: { mouseWheel: false, pinch: true, axisPressedMouseMove: false },
+    handleScale: {
+      mouseWheel: false,
+      pinch: true,
+      axisPressedMouseMove: { time: false, price: true },
+      axisDoubleClickReset: true
+    },
     handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
     grid: { vertLines: { visible: false }, horzLines: { visible: false } },
     crosshair: {
@@ -288,7 +285,15 @@ function createLwChart(container, state) {
     });
   }
 
-  return { chart, candleSeries, maSeries };
+  const bbSeries = {};
+  for (const key of ["upper", "middle", "lower"]) {
+    bbSeries[key] = chart.addLineSeries({
+      color: "#2563eb", lineWidth: 1, lineStyle: key === "middle" ? 0 : 2,
+      crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+      priceFormat
+    });
+  }
+  return { chart, candleSeries, maSeries, bbSeries };
 }
 
 function rowByTime(state, time) {
@@ -350,9 +355,9 @@ function previousRegularCloseForRow(state, row) {
 }
 
 function tooltipValues(state, row) {
-  const open = isIntraday(state.interval) ? row.open : regularOpenForRow(state, row);
+  const open = showLineBreak || isIntraday(state.interval) ? row.open : regularOpenForRow(state, row);
   const close = row.close;
-  const base = isIntraday(state.interval) ? open : previousRegularCloseForRow(state, row);
+  const base = showLineBreak || isIntraday(state.interval) ? open : previousRegularCloseForRow(state, row);
   const changePct = Number.isFinite(base) && base !== 0
     ? ((close - base) / base) * 100
     : NaN;
@@ -409,8 +414,8 @@ function localDateKeyForSymbol(symbol, timestamp) {
 }
 
 function shouldIgnoreIntradayPayload(state, rows, initial) {
-  if (initial || !isIntraday(state.interval) || !state.rows?.length || !rows?.length) return false;
-  const previousLatest = state.rows.at(-1);
+  if (initial || !isIntraday(state.interval) || !state.sourceRows?.length || !rows?.length) return false;
+  const previousLatest = state.sourceRows.at(-1);
   const nextLatest = rows.at(-1);
   if (!previousLatest || !nextLatest) return false;
   const previousTime = Number(previousLatest.time);
@@ -423,7 +428,7 @@ function shouldIgnoreIntradayPayload(state, rows, initial) {
   const sameTailDate = Number.isFinite(priorNextTime)
     && localDateKeyForSymbol(state.item.symbol, priorNextTime) === localDateKeyForSymbol(state.item.symbol, nextTime);
   if (sameTailDate && nextTime - priorNextTime > seconds * 2.5) return true;
-  if (rows.length < Math.max(30, state.rows.length * 0.75)) return true;
+  if (rows.length < Math.max(30, state.sourceRows.length * 0.75)) return true;
   return false;
 }
 
@@ -452,7 +457,7 @@ function isViewAtLatest(state) {
 
 function drawMacdBackground(state) {
   const { bgCanvas, rows, macd, instance } = state;
-  if (!bgCanvas || !rows?.length || !macd?.length) return;
+  if (!bgCanvas) return;
   const rect = bgCanvas.getBoundingClientRect();
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   const width = Math.max(1, Math.floor(rect.width * dpr));
@@ -464,6 +469,7 @@ function drawMacdBackground(state) {
 
   const ctx = bgCanvas.getContext("2d");
   ctx.clearRect(0, 0, width, height);
+  if (showLineBreak || !rows?.length || !macd?.length) return;
 
   const timeScale = instance.chart.timeScale();
   const points = rows
@@ -538,12 +544,12 @@ function drawMacdBackground(state) {
 }
 
 function updateSeriesVisibility(state) {
-  if (!state.rows?.length) return;
   const { instance, visible } = state;
   instance.candleSeries.setData(visible.candle ? state.rows : []);
   for (const period of MA_PERIODS) {
     instance.maSeries[period].setData(visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
   }
+  updateBollinger(state);
 }
 
 function renderLegend(state, payload) {
@@ -572,18 +578,19 @@ function applyPayload(state, payload, initial = false) {
   const sourceRows = payload.series || [];
   if (!sourceRows.length) return;
   const previousLastTime = state.rows?.at(-1)?.time;
-  const rows = sourceRows;
+  if (shouldIgnoreIntradayPayload(state, sourceRows, initial)) return;
+  const rows = showLineBreak ? calculateThreeLineBreak(sourceRows) : sourceRows;
   const latest = rows.at(-1);
-  if (!rows.length) return;
-  if (shouldIgnoreIntradayPayload(state, rows, initial)) return;
+  state.lastPayload = payload;
+  state.lastPayloadKey = chartRequestKey(state);
 
   state.sourceRows = sourceRows;
   state.rows = rows;
-  state.macd = calcMacd(rows);
+  state.macd = showLineBreak ? [] : calcMacd(rows);
   state.previousClose = Number(payload.previousClose);
 
   // isTickUpdate: same last candle time = only price updated, not a new bar
-  const isTickUpdate = !initial && isIntraday(state.interval) && previousLastTime === latest.time;
+  const isTickUpdate = !showLineBreak && !initial && isIntraday(state.interval) && previousLastTime === latest?.time;
 
   // Only apply chart/series options on full reloads to avoid resetting pan/zoom state
   if (!isTickUpdate) {
@@ -600,11 +607,16 @@ function applyPayload(state, payload, initial = false) {
         tickMarkFormatter: (time) => tickFormatter(state.interval, time)
       }
     });
-    state.instance.candleSeries.applyOptions({ priceFormat });
+    state.instance.candleSeries.applyOptions({ priceFormat, wickVisible: !showLineBreak });
+    for (const series of Object.values(state.instance.bbSeries)) series.applyOptions({ priceFormat });
     for (const period of MA_PERIODS) {
       state.instance.maSeries[period].applyOptions({ priceFormat });
     }
   }
+
+  // A new symbol/timeframe starts fitted; ordinary quote refreshes preserve
+  // the manually dragged price range.
+  if (initial) state.instance.chart.priceScale("right").applyOptions({ autoScale: true });
 
   if (isTickUpdate && state.visible.candle) {
     state.instance.candleSeries.update(latest);
@@ -625,8 +637,11 @@ function applyPayload(state, payload, initial = false) {
     }
   }
 
+  updateBollinger(state);
+  state.card.querySelector('[data-series="candle"] .candle-label').textContent = showLineBreak ? "삼선" : "캔들";
+  state.card.querySelector(".price-tooltip").style.display = "none";
   renderLegend(state, payload);
-  if (isIntraday(state.interval)) keepLatestVisible(state);
+  if (initial || isIntraday(state.interval)) keepLatestVisible(state);
   requestAnimationFrame(() => drawMacdBackground(state));
   state.card.classList.add("loaded");
 }
@@ -644,13 +659,22 @@ async function fetchChart(state) {
   return response.json();
 }
 
+function chartRequestKey(state) {
+  return `${state.item.symbol}:${state.interval}:${state.limit}:${sessionMode}`;
+}
+
 async function refreshCard(state, initial = false) {
+  const key = chartRequestKey(state);
+  if (!initial && state.pendingKey === key) return;
+  const requestId = state.requestId = (state.requestId || 0) + 1;
+  state.pendingKey = key;
   if (initial) {
     state.card.classList.remove("loaded");
     state.card.querySelector(".loading").textContent = "불러오는 중";
   }
   try {
     const payload = await fetchChart(state);
+    if (requestId !== state.requestId || key !== chartRequestKey(state)) return;
     state.item = {
       symbol: payload.symbol,
       name: payload.name,
@@ -658,12 +682,18 @@ async function refreshCard(state, initial = false) {
     };
     applyPayload(state, payload, initial);
   } catch {
-    state.card.querySelector(".loading").textContent = "데이터 오류";
+    if (requestId === state.requestId && key === chartRequestKey(state)) {
+      state.card.querySelector(".loading").textContent = "데이터 오류";
+    }
+  } finally {
+    if (requestId === state.requestId) state.pendingKey = null;
   }
 }
 
 function closeSuggestions(card) {
   card.querySelector(".suggestions").classList.remove("open");
+  const state = chartState.get(card.dataset.cardId);
+  if (state) state.searchRequest = (state.searchRequest || 0) + 1;
 }
 
 async function selectSearchItem(card, item) {
@@ -689,9 +719,14 @@ document.addEventListener("pointerdown", (event) => {
 });
 
 async function showSuggestions(card, query) {
+  const state = chartState.get(card.dataset.cardId);
+  const requestId = state.searchRequest = (state.searchRequest || 0) + 1;
   const suggestions = card.querySelector(".suggestions");
+  suggestions.replaceChildren();
+  suggestions.classList.remove("open");
   const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(query)}`);
   const json = await response.json();
+  if (requestId !== state.searchRequest || card.querySelector(".symbol-input").value !== query) return;
   const manualItem = manualSearchItem(query);
   const results = [...(json.results || [])];
   if (manualItem && !results.some((item) => item.symbol === manualItem.symbol)) results.push(manualItem);
@@ -700,7 +735,11 @@ async function showSuggestions(card, query) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "suggestion";
-      button.innerHTML = `<b>${item.name}</b><span>${item.symbol}</span>`;
+      const name = document.createElement("b");
+      name.textContent = item.name;
+      const symbol = document.createElement("span");
+      symbol.textContent = item.symbol;
+      button.append(name, symbol);
       button.addEventListener("mousedown", async (event) => {
         event.preventDefault();
         await selectSearchItem(card, item);
@@ -722,8 +761,8 @@ function manualSearchItem(query) {
   if (upper === "^KQ11") return { symbol: "^KQ11", name: "KOSDAQ" };
   if (upper === "^IXIC") return { symbol: "^IXIC", name: "나스닥" };
   
-  if (/^\d{6}$/.test(raw)) return { symbol: `${raw}.KS`, name: raw };
-  if (/^\d{6}\.(KS|KQ)$/i.test(raw)) return { symbol: upper, name: raw.slice(0, 6) };
+  if (/^[0-9][A-Z0-9]{5}$/i.test(raw)) return { symbol: `${upper}.KS`, name: upper };
+  if (/^[0-9][A-Z0-9]{5}\.(KS|KQ)$/i.test(raw)) return { symbol: upper, name: raw.slice(0, 6) };
   if (/^[A-Z][A-Z0-9.-]{0,9}(\.US)?$/i.test(raw)) {
     const ticker = upper.endsWith(".US") ? upper.slice(0, -3) : upper;
     return { symbol: `${ticker}.US`, name: ticker };
@@ -738,11 +777,11 @@ function bindSearch(card) {
   suggestions.addEventListener("pointerdown", (event) => event.stopPropagation());
   input.addEventListener("focus", () => {
     state.isEditingSymbol = true;
-    showSuggestions(card, input.value);
+    showSuggestions(card, input.value).catch(() => closeSuggestions(card));
   });
   input.addEventListener("input", () => {
     state.isEditingSymbol = true;
-    showSuggestions(card, input.value);
+    showSuggestions(card, input.value).catch(() => closeSuggestions(card));
   });
   input.addEventListener("keydown", async (event) => {
     if (event.key !== "Enter") return;
@@ -752,9 +791,17 @@ function bindSearch(card) {
       first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
       return;
     }
-    const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(input.value)}`);
-    const json = await response.json();
-    const item = json.results?.[0] || manualSearchItem(input.value);
+    const query = input.value;
+    const requestId = state.searchRequest = (state.searchRequest || 0) + 1;
+    let results = [];
+    try {
+      const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(query)}`);
+      results = (await response.json()).results || [];
+    } catch {
+      // Direct symbol entry remains available if the search provider fails.
+    }
+    if (requestId !== state.searchRequest || input.value !== query) return;
+    const item = results[0] || manualSearchItem(query);
     if (item) await selectSearchItem(card, item);
   });
   input.addEventListener("blur", () => {
@@ -771,6 +818,7 @@ function bindLegend(card, state) {
       const key = button.dataset.series;
       state.visible[key] = !state.visible[key];
       button.classList.toggle("off", !state.visible[key]);
+      button.setAttribute("aria-pressed", String(state.visible[key]));
       updateSeriesVisibility(state);
     });
   });
@@ -787,6 +835,10 @@ function renderTimeframeButtons(card, state) {
       button.addEventListener("click", async () => {
         state.interval = timeframe.value;
         state.limit = defaultLimitForInterval(state.interval);
+        if (globalWeekly) {
+          state.restoreInterval = state.interval;
+          state.restoreLimit = state.limit;
+        }
         card.querySelector(".period-input").value = String(state.limit);
         renderTimeframeButtons(card, state);
         await refreshCard(state, true);
@@ -803,6 +855,7 @@ function bindPeriod(card, state) {
     const next = Math.min(MAX_LIMIT, Math.max(minimumLimitForInterval(state.interval), Number(input.value || DEFAULT_LIMIT)));
     input.value = String(next);
     state.limit = next;
+    if (globalWeekly && state.restoreInterval === state.interval) state.restoreLimit = next;
     await refreshCard(state, true);
   };
   input.addEventListener("change", apply);
@@ -824,7 +877,9 @@ async function createCard(item, index) {
     card,
     bgCanvas,
     item,
-    interval: DEFAULT_INTERVAL,
+    interval: globalWeekly ? "1wk" : DEFAULT_INTERVAL,
+    restoreInterval: DEFAULT_INTERVAL,
+    restoreLimit: DEFAULT_LIMIT,
     limit: DEFAULT_LIMIT,
     sourceRows: [],
     rows: [],
@@ -836,7 +891,8 @@ async function createCard(item, index) {
       ma20: true,
       ma60: true,
       ma120: true,
-      ma240: true
+      ma200: true,
+      bb: showBollinger
     }
   };
   state.instance = createLwChart(stage, state);
@@ -846,6 +902,14 @@ async function createCard(item, index) {
 
   chartState.set(id, state);
   bindSearch(card);
+  card.querySelectorAll(".ma-legend button").forEach((button) => {
+    button.setAttribute("aria-pressed", String(state.visible[button.dataset.series]));
+    const period = Number(button.dataset.series.replace("ma", ""));
+    if (MA_COLORS[period]) {
+      button.style.color = MA_COLORS[period];
+      button.querySelector("i").style.backgroundColor = MA_COLORS[period];
+    }
+  });
   bindLegend(card, state);
   renderTimeframeButtons(card, state);
   bindPeriod(card, state);
@@ -894,6 +958,36 @@ async function refreshAll(initial = false) {
     chartRefreshInFlight = false;
   }
 }
+
+document.querySelectorAll(".chart-toggle").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const feature = button.dataset.feature;
+    if (feature === "bb") showBollinger = !showBollinger;
+    if (feature === "weekly") globalWeekly = !globalWeekly;
+    if (feature === "line-break") showLineBreak = !showLineBreak;
+    const enabled = feature === "bb" ? showBollinger : feature === "weekly" ? globalWeekly : showLineBreak;
+    button.classList.toggle("active", enabled);
+    button.setAttribute("aria-pressed", String(enabled));
+    await Promise.all([...chartState.values()].map(async (state) => {
+      if (feature === "bb") {
+        state.visible.bb = showBollinger;
+        const local = state.card.querySelector('[data-series="bb"]');
+        local.classList.toggle("off", !showBollinger);
+        local.setAttribute("aria-pressed", String(showBollinger));
+        updateBollinger(state);
+      } else if (feature === "weekly") {
+        setWeekly(state, globalWeekly);
+        if (globalWeekly) state.limit = defaultLimitForInterval("1wk");
+        state.card.querySelector(".period-input").value = String(state.limit);
+        renderTimeframeButtons(state.card, state);
+        await refreshCard(state, true);
+      } else if (state.lastPayload && state.lastPayloadKey === chartRequestKey(state)) {
+        applyPayload(state, state.lastPayload, true);
+      }
+      requestAnimationFrame(() => drawMacdBackground(state));
+    }));
+  });
+});
 
 sessionButtons.forEach((button) => {
   button.addEventListener("click", async () => {

@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { createEtfSearch } from "./lib/etf-search.js";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
@@ -1603,7 +1604,7 @@ async function searchUsSymbols(query) {
     if (!response.ok) return [];
     const json = await response.json();
     return (json.quotes || [])
-      .filter((quote) => ["EQUITY", "ETF"].includes(quote.quoteType) && quote.symbol && quote.shortname)
+      .filter((quote) => ["EQUITY", "ETF"].includes(quote.quoteType) && quote.symbol && (quote.shortname || quote.longname))
       .filter((quote) => usExchanges.has(quote.exchange) && !String(quote.symbol).includes("."))
       .map((quote) => ({
         symbol: `${String(quote.symbol).toUpperCase()}.US`,
@@ -1614,15 +1615,19 @@ async function searchUsSymbols(query) {
   }
 }
 
+const searchEtfs = createEtfSearch(fetchWithTimeout);
+
 async function searchSymbols(query) {
+  if (!query.trim()) return [];
   const staticMatches = staticSearch(query);
-  const [koreanMatches, koreanMasterMatches, naverWebMatches, usMatches] = await Promise.all([
+  const [etfMatches, koreanMatches, koreanMasterMatches, naverWebMatches, usMatches] = await Promise.all([
+    searchEtfs(query),
     searchKoreanSymbols(query),
     searchKoreanMasterSymbols(query),
     searchNaverWebSymbols(query),
     searchUsSymbols(query)
   ]);
-  return mergeSearchResults(staticMatches, koreanMatches, koreanMasterMatches, naverWebMatches, usMatches);
+  return mergeSearchResults(etfMatches, staticMatches, koreanMatches, koreanMasterMatches, naverWebMatches, usMatches);
 }
 
 function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {

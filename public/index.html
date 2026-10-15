@@ -4,15 +4,22 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>stock8 - 4개 캔들차트</title>
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/stock8-7/styles.css">
   </head>
   <body>
     <div class="app">
       <header class="app-header">
         <div class="market-summary" id="marketSummary" aria-label="시장 요약"></div>
-        <div class="session-toggle" aria-label="시장 데이터 모드">
-          <button type="button" class="session-button active" data-mode="KRX">KRX</button>
-          <button type="button" class="session-button" data-mode="NTX">NTX</button>
+        <div class="header-actions">
+          <div class="feature-toggle" aria-label="전체 차트 설정">
+            <button type="button" class="chart-toggle active" data-feature="bb" aria-pressed="true" title="전체 차트 볼린저밴드 표시/숨김 (20기간, 2 표준편차)">BB</button>
+            <button type="button" class="chart-toggle" data-feature="weekly" aria-pressed="false" title="전체 주봉 전환. 끄면 이전 주기로 복원 (개별 봉 선택 가능)">주</button>
+            <button type="button" class="chart-toggle" data-feature="line-break" aria-pressed="false" title="전체 삼선전환도 표시/해제. 이평선과 BB는 전환선 기준으로 계산">삼선</button>
+          </div>
+          <div class="session-toggle" aria-label="시장 데이터 모드">
+            <button type="button" class="session-button active" data-mode="KRX">KRX</button>
+            <button type="button" class="session-button" data-mode="NTX">NTX</button>
+          </div>
         </div>
       </header>
       <main class="chart-grid" id="chartGrid"></main>
@@ -21,7 +28,7 @@
     <template id="chart-card-template">
       <section class="chart-card">
         <canvas class="macd-bg" aria-label="MACD 배경"></canvas>
-        <div class="chart-stage"></div>
+        <div class="chart-stage" aria-label="주가 차트. 오른쪽 가격 눈금을 위아래로 드래그하면 Y축 범위 조절, 더블클릭하면 자동 범위 복원"></div>
         <div class="card-controls" aria-label="차트 설정">
           <div class="timeframe-buttons"></div>
           <label class="period-control">
@@ -43,13 +50,14 @@
             <span class="market-status">--</span>
           </div>
           <div class="ma-legend">
-            <button type="button" data-series="candle"><i class="candle-swatch"></i>캔들</button>
+            <button type="button" data-series="candle"><i class="candle-swatch"></i><span class="candle-label">캔들</span></button>
             <button type="button" data-series="ma5"><i class="ma5"></i>5</button>
             <button type="button" data-series="ma10"><i class="ma10"></i>10</button>
             <button type="button" data-series="ma20"><i class="ma20"></i>20</button>
             <button type="button" data-series="ma60"><i class="ma60"></i>60</button>
             <button type="button" data-series="ma120"><i class="ma120"></i>120</button>
-            <button type="button" data-series="ma240"><i class="ma240"></i>240</button>
+            <button type="button" data-series="ma200"><i class="ma200"></i>200</button>
+            <button type="button" data-series="bb" title="이 차트만 볼린저밴드 표시/숨김"><i class="bb-swatch"></i>BB</button>
           </div>
         </div>
         <div class="price-tooltip" role="tooltip"></div>
@@ -58,6 +66,6 @@
     </template>
 
     <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
-    <script src="/app.js" type="module"></script>
+    <script src="/stock8-7/app.js" type="module"></script>
   </body>
 </html>
