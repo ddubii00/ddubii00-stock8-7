@@ -19,10 +19,10 @@ const TIMEFRAMES = [
 ];
 
 const MARKET_ITEMS = [
-  { label: "달러/원", symbol: "KRW=X", decimals: 2 },
-  { label: "KOSPI", symbol: "^KS11", decimals: 2 },
-  { label: "KOSDAQ", symbol: "^KQ11", decimals: 2 },
-  { label: "나스닥", symbol: "^IXIC", decimals: 2 }
+  { label: "달러/원", symbol: "KRW=X", decimals: 0 },
+  { label: "KOSPI", symbol: "^KS11", decimals: 0 },
+  { label: "KOSDAQ", symbol: "^KQ11", decimals: 0 },
+  { label: "나스닥", symbol: "^IXIC", decimals: 0 }
 ];
 
 const DEFAULT_LIMIT = 120;
@@ -947,9 +947,14 @@ function renderMarketItem(item, quote) {
   const change = Number(quote.changePercent ?? quote.changeRate ?? 0);
   const direction = change >= 0 ? "up" : "down";
   const status = quote.marketStatus === "장중" ? "장중" : "장종료";
+  const amount = quote.change != null && Number.isFinite(Number(quote.change))
+    ? Number(quote.change)
+    : quote.previousClose != null ? Number(quote.price) - Number(quote.previousClose) : NaN;
+  const rounded = Math.sign(amount) * Math.round(Math.abs(amount));
+  const delta = Number.isFinite(rounded) ? `${rounded > 0 ? "+" : ""}${formatNumber(rounded === 0 ? 0 : rounded, 0)}` : "--";
   const span = document.createElement("span");
   span.className = `market-item ${direction}`;
-  span.innerHTML = `<span class="market-label">${item.label}</span><strong>${formatNumber(quote.price, item.decimals)}</strong><span class="market-change">(${formatChange(change, 2)})</span><span class="market-session ${direction}">${status}</span>`;
+  span.innerHTML = `<span class="market-label">${item.label}</span><strong>${formatNumber(quote.price, item.decimals)}</strong><span class="market-delta" title="등락폭">${delta}</span><span class="market-change">(${formatChange(change, 2)})</span><span class="market-session ${direction}">${status}</span>`;
   return span;
 }
 
