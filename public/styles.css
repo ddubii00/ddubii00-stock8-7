@@ -258,9 +258,11 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: 6px;
+  min-width: 0;
   min-height: 0;
-  flex: 1;
+  flex: 1 1 0;
   padding: 6px;
+  overflow: hidden;
 }
 
 .chart-card {
@@ -574,16 +576,6 @@ body {
 }
 
 @media (max-width: 820px) {
-  html,
-  body {
-    overflow: auto;
-  }
-
-  .app {
-    height: auto;
-    min-height: 100vh;
-  }
-
   .app-header {
     min-height: 44px;
   }
@@ -611,15 +603,6 @@ body {
     grid-column: 1 / -1;
   }
 
-  .chart-grid {
-    grid-template-columns: 1fr;
-    grid-template-rows: none;
-    height: auto;
-  }
-
-  .chart-card {
-    height: 310px;
-  }
 }
 
 @media (orientation: portrait) and (min-width: 821px) {
@@ -656,7 +639,6 @@ body {
 .navigation-controls button { height: 22px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: #fff; color: var(--text); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
 #pageIndicator { padding: 0 3px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .save-status { font-size: 10px; white-space: nowrap; color: var(--muted); }
-.save-status[data-status="saving"] { color: #a16207; }
 .save-status[data-status="error"] { color: #dc2626; }
 .ma-legend { flex-wrap: wrap; row-gap: 3px; }
 .trend-toolbar { display: inline-flex; gap: 5px; align-items: center; padding-left: 5px; border-left: 1px solid var(--border); }
@@ -668,14 +650,12 @@ body {
 .chart-stage.editing-line, .chart-stage.editing-line canvas { touch-action: none; }
 .chart-card:focus { outline: none; }
 .load-retry { margin: auto; padding: 18px; border: 1px solid var(--border); border-radius: 6px; background: white; cursor: pointer; }
-/* Layout numbers mean columns × rows; each selection stays explicit on every screen. */
-.chart-grid[data-layout="2x2"] { grid-template-columns: repeat(2, minmax(280px, 1fr)); grid-template-rows: repeat(2, minmax(260px, 1fr)); overflow: auto; }
-.chart-grid[data-layout="4x1"] { grid-template-columns: repeat(4, minmax(280px, 1fr)); grid-template-rows: minmax(300px, 1fr); overflow: auto; }
-.chart-grid[data-layout="1x4"] { grid-template-columns: minmax(280px, 1fr); grid-template-rows: repeat(4, minmax(240px, 1fr)); overflow: auto; }
+/* Layout numbers mean columns × rows; all four charts fit the viewport. */
+.chart-grid[data-layout="2x2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+.chart-grid[data-layout="4x1"] { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); }
+.chart-grid[data-layout="1x4"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(4, minmax(0, 1fr)); }
 .chart-grid[data-layout] > .chart-card { height: auto; }
 @media (max-width: 820px) {
-  .app { height: 100dvh; min-height: 0; }
-  .chart-grid[data-layout] { height: auto; }
   .app-header { grid-template-columns: 1fr; gap: 4px; }
   .header-actions { justify-self: end; flex-wrap: wrap; justify-content: end; }
 }

@@ -112,8 +112,9 @@ function priceFormatForSymbol(symbol) {
 function showSaveStatus(status, message = "") {
   const root = document.querySelector("#saveStatus");
   root.dataset.status = status;
-  root.textContent = status === "error" ? "저장 연결 오류" : status === "saving" ? "저장 중" : "저장됨";
-  root.title = message || "종목과 선 정보를 서버에 저장합니다.";
+  root.hidden = status !== "error";
+  root.textContent = status === "error" ? "저장 연결 오류" : "";
+  root.title = message;
 }
 
 function persistSlot(state, patch) {
