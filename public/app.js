@@ -3,6 +3,7 @@ import { calculateThreeLineBreak } from "./three-line-break.js";
 import { SharedDashboard } from "./shared-dashboard.js";
 import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS } from "./dashboard-model.js";
 import { TrendEditor } from "./trend-editor.js";
+import { manualSearchItem, searchResultsWithFallback, prioritizeExactInstrument } from "./symbol-input.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -765,9 +766,7 @@ async function showSuggestions(card, query) {
   const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(query)}`);
   const json = await response.json();
   if (state.disposed || requestId !== state.searchRequest || card.querySelector(".symbol-input").value !== query) return;
-  const manualItem = manualSearchItem(query);
-  const results = [...(json.results || [])];
-  if (manualItem && !results.some((item) => item.symbol === manualItem.symbol)) results.push(manualItem);
+  const results = prioritizeExactInstrument(searchResultsWithFallback(json.results, query), query);
   suggestions.replaceChildren(
     ...results.map((item) => {
       const button = document.createElement("button");
@@ -786,26 +785,6 @@ async function showSuggestions(card, query) {
     })
   );
   suggestions.classList.toggle("open", results.length > 0);
-}
-
-function manualSearchItem(query) {
-  const raw = String(query || "").trim();
-  if (!raw) return null;
-  const upper = raw.toUpperCase();
-  if (upper === "KOSPI" || upper === "코스피") return { symbol: "^KS11", name: "KOSPI" };
-  if (upper === "KOSDAQ" || upper === "코스닥") return { symbol: "^KQ11", name: "KOSDAQ" };
-  if (upper === "NASDAQ" || upper === "나스닥") return { symbol: "^IXIC", name: "나스닥" };
-  if (upper === "^KS11") return { symbol: "^KS11", name: "KOSPI" };
-  if (upper === "^KQ11") return { symbol: "^KQ11", name: "KOSDAQ" };
-  if (upper === "^IXIC") return { symbol: "^IXIC", name: "나스닥" };
-  
-  if (/^[0-9][A-Z0-9]{5}$/i.test(raw)) return { symbol: `${upper}.KS`, name: upper };
-  if (/^[0-9][A-Z0-9]{5}\.(KS|KQ)$/i.test(raw)) return { symbol: upper, name: raw.slice(0, 6) };
-  if (/^[A-Z][A-Z0-9.-]{0,9}(\.US)?$/i.test(raw)) {
-    const ticker = upper.endsWith(".US") ? upper.slice(0, -3) : upper;
-    return { symbol: `${ticker}.US`, name: ticker };
-  }
-  return null;
 }
 
 function bindSearch(card) {
@@ -839,11 +818,12 @@ function bindSearch(card) {
       // Direct symbol entry remains available if the search provider fails.
     }
     if (requestId !== state.searchRequest || input.value !== query) return;
-    const item = results[0] || manualSearchItem(query);
+    const item = prioritizeExactInstrument(results, query)[0] || manualSearchItem(query);
     if (item) await selectSearchItem(card, item);
   });
   input.addEventListener("blur", () => {
     setTimeout(() => {
+      if (document.activeElement === input || state.disposed) return;
       closeSuggestions(card);
       state.isEditingSymbol = false;
       if (sharedState && !state.disposed) applySharedState(sharedState);

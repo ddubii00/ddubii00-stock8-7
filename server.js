@@ -1,5 +1,7 @@
 import "dotenv/config";
 import { createEtfSearch } from "./lib/etf-search.js";
+import { createKoreanCodeResolver } from "./lib/symbol-search.js";
+import { normalizeSearchQuery, parseKoreanCode, parseUsTicker, manualSearchItem, prioritizeExactInstrument } from "./public/symbol-input.js";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
@@ -1456,14 +1458,9 @@ function staticSearch(query) {
   const q = query.trim().toLowerCase();
   const compact = compactText(q);
   if (!compact) return [];
-  const sixDigit = compact.match(/^\d{6}$/);
-  const exactSymbol = SYMBOL_NAMES[`${compact}.KQ`] && !SYMBOL_NAMES[`${compact}.KS`] ? `${compact}.KQ` : `${compact}.KS`;
-  const exactCode = sixDigit
-    ? [{ symbol: exactSymbol, name: SYMBOL_NAMES[exactSymbol] || compact }]
-    : [];
   const matches = SYMBOL_SEARCH
     .map((item) => {
-      const values = [item.symbol.replace(".US", ""), item.symbol.replace(/\.(KS|KQ|US)$/, ""), item.name, ...(item.aliases || [])];
+      const values = [item.symbol, item.symbol.replace(".US", ""), item.symbol.replace(/\.(KS|KQ|US)$/, ""), item.name, ...(item.aliases || [])];
       const compactValues = values.map(compactText);
       let score = 99;
       if (compactValues.some((value) => value === compact)) score = 0;
@@ -1474,7 +1471,7 @@ function staticSearch(query) {
     .filter(({ score }) => score < 99)
     .sort((a, b) => a.score - b.score || a.item.name.localeCompare(b.item.name))
     .map(({ item }) => item);
-  return [...exactCode, ...matches];
+  return matches;
 }
 
 function mergeSearchResults(...groups) {
@@ -1489,7 +1486,7 @@ function mergeSearchResults(...groups) {
       merged.push({ symbol, name: item.name, aliases: item.aliases || [] });
     }
   }
-  return merged.slice(0, 12);
+  return merged;
 }
 
 function koreanMarketSuffix(marketText = "") {
@@ -1601,7 +1598,8 @@ async function searchNaverWebSymbols(query) {
 async function searchUsSymbols(query) {
   if (!/[a-zA-Z]/.test(query)) return [];
   const usExchanges = new Set(["NYQ", "NYS", "NMS", "NGM", "NCM", "NAS", "ASE", "PCX", "BTS"]);
-  const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=12&newsCount=0`;
+  const ticker = parseUsTicker(query);
+  const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker || query)}&quotesCount=12&newsCount=0`;
   try {
     const response = await fetchWithTimeout(url, 1800, {
       headers: { "Accept": "application/json" }
@@ -1621,9 +1619,19 @@ async function searchUsSymbols(query) {
 }
 
 const searchEtfs = createEtfSearch(fetchWithTimeout);
+const resolveKoreanCode = createKoreanCodeResolver(fetchWithTimeout, SYMBOL_NAMES);
 
 async function searchSymbols(query) {
-  if (!query.trim()) return [];
+  query = normalizeSearchQuery(query);
+  if (!query) return [];
+  const korean = parseKoreanCode(query);
+  if (korean) {
+    const exact = await resolveKoreanCode(query);
+    if (exact) return [exact];
+    query = korean.code;
+  }
+  const ticker = parseUsTicker(query);
+  if (ticker && SYMBOL_NAMES[`${ticker}.US`]) return [{symbol:`${ticker}.US`, name:SYMBOL_NAMES[`${ticker}.US`]}];
   const staticMatches = staticSearch(query);
   const [etfMatches, koreanMatches, koreanMasterMatches, naverWebMatches, usMatches] = await Promise.all([
     searchEtfs(query),
@@ -1632,7 +1640,12 @@ async function searchSymbols(query) {
     searchNaverWebSymbols(query),
     searchUsSymbols(query)
   ]);
-  return mergeSearchResults(etfMatches, staticMatches, koreanMatches, koreanMasterMatches, naverWebMatches, usMatches);
+  const results = prioritizeExactInstrument(mergeSearchResults(etfMatches, staticMatches, koreanMatches, koreanMasterMatches, naverWebMatches, usMatches), query);
+  if (korean) {
+    const exact = results.filter(item => item.symbol.slice(0, 6) === korean.code);
+    return exact.length ? exact : [manualSearchItem(query)];
+  }
+  return results.slice(0, 12);
 }
 
 function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {
