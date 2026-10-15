@@ -949,7 +949,7 @@ function renderMarketItem(item, quote) {
   const status = quote.marketStatus === "장중" ? "장중" : "장종료";
   const span = document.createElement("span");
   span.className = `market-item ${direction}`;
-  span.innerHTML = `${item.label}<strong>${formatNumber(quote.price, item.decimals)}</strong><span class="market-change">(${formatChange(change, 2)})</span><span class="market-session ${direction}">${status}</span>`;
+  span.innerHTML = `<span class="market-label">${item.label}</span><strong>${formatNumber(quote.price, item.decimals)}</strong><span class="market-change">(${formatChange(change, 2)})</span><span class="market-session ${direction}">${status}</span>`;
   return span;
 }
 
