@@ -300,6 +300,7 @@ function createLwChart(container, state) {
     width: container.clientWidth,
     height: container.clientHeight,
     layout: {
+      attributionLogo: false,
       background: { type: LightweightCharts.ColorType.Solid, color: "transparent" },
       textColor: "#172033",
       fontFamily: "Inter, Pretendard, sans-serif"
