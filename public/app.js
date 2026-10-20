@@ -6,6 +6,7 @@ import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
 import { isFuturesSymbol } from "./instrument-catalog.js";
+import { buildTimeAlignments } from "./chart-alignment.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -81,6 +82,75 @@ let showLineBreak = false;
 let chartFitFrame = 0;
 let priceScaleFitFrame = 0;
 let priceScaleWidth = PRICE_SCALE_WIDTH;
+let alignmentFrame = 0;
+let syncingRange = false;
+let hoveredChart = null;
+
+function syncVerticalCursor() {
+  for (const state of chartState.values()) {
+    const sameGroup = hoveredChart && state !== hoveredChart.state && state.alignment && state.alignment === hoveredChart.state.alignment;
+    const x = sameGroup ? state.instance.chart.timeScale().timeToCoordinate(hoveredChart.time) : null;
+    const visible = Number.isFinite(x) && x >= 0 && x <= state.instance.chart.timeScale().width();
+    state.syncCursor.hidden = !visible;
+    if (visible) {
+      state.syncCursor.style.left = `${x}px`;
+      state.syncCursor.style.bottom = `${state.instance.chart.timeScale().height()}px`;
+      state.syncCursor.dataset.time = String(hoveredChart.time);
+    }
+  }
+}
+
+function scheduleTimeAlignment() {
+  if (alignmentFrame) return;
+  alignmentFrame = requestAnimationFrame(() => {
+    alignmentFrame = 0;
+    const states = [...chartState.values()].filter(state => !state.disposed);
+    const ready = states.filter(state => state.rows.length && state.lastPayloadKey === chartRequestKey(state));
+    const groups = buildTimeAlignments(ready.map(state => ({ slotIndex: state.slotIndex, interval: state.interval, limit: state.limit,
+      rows: state.rows, visibleLimit: visibleRows(state).length, state })), LAYOUTS[layoutIndex]);
+    const previous = new Map(states.map(state => [state, state.alignment]));
+    for (const state of states) state.alignment = null;
+    syncingRange = true;
+    try {
+      for (const group of groups) {
+        const peers = group.members.map(member => member.state);
+        const unchanged = peers.every(state => previous.get(state)?.signature === group.signature);
+        group.states = peers;
+        for (const state of peers) {
+          state.alignment = group;
+          state.timeline = group.timeline;
+          if (!unchanged) {
+            state.instance.timelineSeries.setData(group.timeline);
+            state.instance.chart.timeScale().setVisibleLogicalRange(group.range);
+          }
+        }
+      }
+      for (const state of states) {
+        if (state.alignment) continue;
+        state.timeline = state.rows;
+        if (previous.get(state)) {
+          state.instance.timelineSeries.setData([]);
+          keepLatestVisible(state);
+        }
+      }
+    } finally { syncingRange = false; }
+    for (const state of ready) { drawMacdBackground(state); state.trendEditor?.schedule(); }
+    syncVerticalCursor();
+  });
+}
+
+function syncVisibleRange(state, range) {
+  if (!syncingRange && range && state.alignment) {
+    syncingRange = true;
+    try {
+      for (const peer of state.alignment.states) {
+        if (peer !== state && !peer.disposed) peer.instance.chart.timeScale().setVisibleLogicalRange(range);
+      }
+    } finally { syncingRange = false; }
+  }
+  drawMacdBackground(state);
+  syncVerticalCursor();
+}
 
 function syncPriceScaleWidths() {
   if (priceScaleFitFrame) return;
@@ -198,6 +268,7 @@ function applySharedState(value) {
 }
 
 function disposeCard(state) {
+  if (hoveredChart?.state === state) hoveredChart = null;
   state.disposed = true;
   state.requestId = (state.requestId || 0) + 1;
   state.trendEditor?.destroy();
@@ -205,6 +276,7 @@ function disposeCard(state) {
   state.instance.chart.remove();
   chartState.delete(state.card.dataset.cardId);
   state.card.remove();
+  scheduleTimeAlignment();
 }
 
 async function renderPage() {
@@ -317,8 +389,8 @@ function createLwChart(container, state) {
     grid: { vertLines: { visible: false }, horzLines: { visible: false } },
     crosshair: {
       mode: LightweightCharts.CrosshairMode.Normal,
-      vertLine: { color: "#cbd5e1", width: 1, style: 3 },
-      horzLine: { color: "#cbd5e1", width: 1, style: 3 }
+      vertLine: { color: "#64748b", width: 1, style: 3 },
+      horzLine: { color: "#64748b", width: 1, style: 3 }
     },
     rightPriceScale: {
       borderColor: "#dbe3f1",
@@ -381,7 +453,8 @@ function createLwChart(container, state) {
       priceFormat
     });
   }
-  return { chart, candleSeries, maSeries, bbSeries, observer };
+  const timelineSeries = chart.addLineSeries({ visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+  return { chart, candleSeries, maSeries, bbSeries, timelineSeries, observer };
 }
 
 function rowByTime(state, time) {
@@ -522,6 +595,10 @@ function shouldIgnoreIntradayPayload(state, rows, initial) {
 }
 
 function keepLatestVisible(state) {
+  if (state.alignment) {
+    state.instance.chart.timeScale().setVisibleLogicalRange(state.alignment.range);
+    return;
+  }
   const rows = visibleRows(state);
   if (!rows.length) return;
   const total = state.rows.length;
@@ -657,6 +734,9 @@ function renderLegend(state, payload) {
   const statusEl = card.querySelector(".market-status");
   statusEl.textContent = payload.marketStatus || "종가";
   statusEl.className = `market-status ${direction}`;
+  statusEl.title = isFuturesSymbol(state.item.symbol)
+    ? [payload.contract ? `월물 ${payload.contract}` : 'Yahoo Finance 지연 시세',
+      payload.marketTime || payload.asOf ? `시세 시각 ${new Date((payload.marketTime || payload.asOf) * 1000).toLocaleString('ko-KR')}` : '', payload.streamError || ''].filter(Boolean).join('\n') : '';
   card.querySelector(".last-change").textContent = formatChange(changePct, 2);
   card.querySelector(".last-change").className = `last-change ${direction}`;
 }
@@ -669,7 +749,7 @@ function applyPayload(state, payload, initial = false) {
   if (shouldIgnoreIntradayPayload(state, sourceRows, initial)) return;
   state.latestSourceRows = sourceRows;
   if (showLineBreak) {
-    const historyKey = `${state.item.symbol}:${state.interval}:${sessionMode}`;
+    const historyKey = `${state.item.symbol}:${payload.contract || ''}:${state.interval}:${sessionMode}`;
     sourceRows = mergeCandleHistory(candleHistories.get(historyKey) || [], sourceRows);
     if (!candleHistories.has(historyKey) && candleHistories.size >= 60) candleHistories.delete(candleHistories.keys().next().value);
     candleHistories.set(historyKey, sourceRows);
@@ -740,6 +820,7 @@ function applyPayload(state, payload, initial = false) {
   state.card.classList.toggle("no-line-break", showLineBreak && !rows.length);
   if (showLineBreak && !rows.length) state.card.querySelector(".loading").textContent = "삼선 돌파가 없습니다";
   syncPriceScaleWidths();
+  scheduleTimeAlignment();
   state.trendEditor?.schedule();
 }
 
@@ -753,7 +834,10 @@ async function fetchChart(state) {
     mode: sessionMode
   });
   const response = await fetch(`/stock8-7/api/chart?${params.toString()}`);
-  if (!response.ok) throw new Error(`chart ${response.status}`);
+  if (!response.ok) {
+    const details = await response.json().catch(() => ({}));
+    throw new Error(details.error || `chart ${response.status}`);
+  }
   return response.json();
 }
 
@@ -780,9 +864,16 @@ async function refreshCard(state, initial = false) {
       decimals: payload.decimals
     };
     applyPayload(state, payload, initial);
+    state.card.querySelector('.market-status').classList.remove('data-error');
   } catch (error) {
     if (!state.disposed && requestId === state.requestId && key === chartRequestKey(state)) {
       state.card.querySelector(".loading").textContent = error.message || "데이터 오류";
+      if (isFuturesSymbol(state.item.symbol)) {
+        const status = state.card.querySelector('.market-status');
+        status.textContent = '수신 오류';
+        status.title = error.message;
+        status.classList.add('data-error');
+      }
     }
   } finally {
     if (requestId === state.requestId) state.pendingKey = null;
@@ -880,12 +971,25 @@ async function createCard(item, index) {
     }
   };
   state.instance = createLwChart(stage, state);
-  state.instance.chart.timeScale().subscribeVisibleLogicalRangeChange(() => drawMacdBackground(state));
+  state.syncCursor = document.createElement('div');
+  state.syncCursor.className = 'synced-crosshair';
+  state.syncCursor.hidden = true;
+  state.syncCursor.setAttribute('aria-hidden', 'true');
+  card.append(state.syncCursor);
+  state.instance.chart.timeScale().subscribeVisibleLogicalRangeChange(range => syncVisibleRange(state, range));
   state.instance.chart.timeScale().subscribeSizeChange(() => {
     drawMacdBackground(state);
     syncPriceScaleWidths();
   });
-  state.instance.chart.subscribeCrosshairMove((param) => showTooltip(state, param));
+  state.instance.chart.subscribeCrosshairMove((param) => {
+    showTooltip(state, param);
+    hoveredChart = param.time && param.point && param.point.x >= 0 && param.point.x <= state.instance.chart.timeScale().width()
+      ? { state, time: param.time } : null;
+    syncVerticalCursor();
+  });
+  stage.addEventListener('pointerleave', () => {
+    if (hoveredChart?.state === state) { hoveredChart = null; syncVerticalCursor(); }
+  });
 
   chartState.set(id, state);
   card.querySelectorAll(".ma-legend button[data-series]").forEach((button) => {
@@ -1022,6 +1126,7 @@ document.querySelector("#layoutButton").addEventListener("click", () => {
     disposeCard(fourthCard);
   }
   fitChartsToSlots();
+  scheduleTimeAlignment();
   const button = document.querySelector("#layoutButton");
   button.title = `현재 ${LAYOUTS[layoutIndex]} (가로 × 세로). 클릭하면 다음 배치`;
   button.setAttribute("aria-label", `배치 ${LAYOUTS[layoutIndex]}`);

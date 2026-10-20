@@ -46,7 +46,7 @@ export class TrendEditor {
   }
   schedule() { cancelAnimationFrame(this.frame); this.frame = requestAnimationFrame(() => this.repaint()); }
   project(anchor) {
-    const logical = logicalAtTime(this.state.rows, anchor.time);
+    const logical = logicalAtTime(this.state.timeline || this.state.rows, anchor.time);
     return { x: logical == null ? null : this.state.instance.chart.timeScale().logicalToCoordinate(logical), y: this.state.instance.candleSeries.priceToCoordinate(anchor.price) };
   }
   repaint() {
@@ -84,7 +84,7 @@ export class TrendEditor {
     const box = this.stage.getBoundingClientRect();
     const x = Math.max(0, Math.min(this.width, event.clientX - box.left));
     const y = Math.max(0, Math.min(this.height, event.clientY - box.top));
-    const time = timeAtLogical(this.state.rows, this.state.instance.chart.timeScale().coordinateToLogical(x));
+    const time = timeAtLogical(this.state.timeline || this.state.rows, this.state.instance.chart.timeScale().coordinateToLogical(x));
     const price = this.state.instance.candleSeries.coordinateToPrice(y);
     return time != null && Number.isFinite(price) ? {time,price} : null;
   }

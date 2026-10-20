@@ -366,6 +366,15 @@ body {
   height: 100%;
 }
 
+.synced-crosshair {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  width: 1px;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, #64748b 0 6px, transparent 6px 10px);
+}
+
 .chart-overlay {
   position: relative;
   z-index: 5;

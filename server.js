@@ -1,4 +1,4 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import { createEtfSearch } from "./lib/etf-search.js";
 import { createKoreanCodeResolver, parseYahooSearchResults } from "./lib/symbol-search.js";
 import { INSTRUMENT_CATALOG, exactCatalogItem, isFuturesSymbol } from "./public/instrument-catalog.js";
@@ -8,7 +8,12 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { createDashboardStore } from "./lib/dashboard-store.js";
 import { createAuth, readJsonBody } from "./lib/auth.js";
+import { createKisClient } from "./lib/kis-client.js";
+import { createKisFutures } from "./lib/kis-futures.js";
 
+// Match stock5-8: exported variables win, then .env.local, then .env.
+dotenv.config({ path: '.env.local', quiet: true });
+dotenv.config({ quiet: true });
 const PORT = Number(process.env.PORT || 8000);
 const DATA_DIR = resolve(process.env.STOCK8_DATA_DIR || "data");
 const dashboardStore = await createDashboardStore(DATA_DIR);
@@ -18,10 +23,19 @@ const KIS_APP_KEY = process.env.KIS_APP_KEY || "";
 const KIS_APP_SECRET = process.env.KIS_APP_SECRET || "";
 const KIS_BASE_URL = (process.env.KIS_BASE_URL || "https://openapi.koreainvestment.com:9443").replace(/\/$/, "");
 const KIS_ENABLED = Boolean(KIS_APP_KEY && KIS_APP_SECRET && KIS_BASE_URL);
-const KIS_TOKEN_SAFETY_MS = 60_000;
+const hasFuturesCredentials = Boolean(process.env.KIS_FUTURES_APP_KEY || process.env.KIS_FUTURES_APP_SECRET);
+const KIS_FUTURES_APP_KEY = hasFuturesCredentials ? process.env.KIS_FUTURES_APP_KEY || "" : KIS_APP_KEY;
+const KIS_FUTURES_APP_SECRET = hasFuturesCredentials ? process.env.KIS_FUTURES_APP_SECRET || "" : KIS_APP_SECRET;
+const KIS_FUTURES_ENABLED = Boolean(KIS_FUTURES_APP_KEY && KIS_FUTURES_APP_SECRET);
+const mainKisClient = createKisClient({ appKey: KIS_APP_KEY, appSecret: KIS_APP_SECRET, baseUrl: KIS_BASE_URL, fetcher: fetchWithTimeout });
+const futuresClient = KIS_FUTURES_APP_KEY === KIS_APP_KEY && KIS_FUTURES_APP_SECRET === KIS_APP_SECRET ? mainKisClient
+  : createKisClient({ appKey: KIS_FUTURES_APP_KEY, appSecret: KIS_FUTURES_APP_SECRET, baseUrl: KIS_BASE_URL, fetcher: fetchWithTimeout });
+const kisFutures = createKisFutures({ ...futuresClient, fetcher: fetchWithTimeout,
+  contractOverride: (process.env.KIS_NQ_CONTRACT || "").trim().toUpperCase(),
+  wsUrl: process.env.KIS_FUTURES_WS_URL || process.env.KIS_WS_URL || "ws://ops.koreainvestment.com:21000",
+  timeZone: process.env.KIS_FUTURES_TIME_ZONE || "Asia/Seoul" });
 const MAX_QUERY_LIMIT = 700;
 const MAX_LINE_BREAK_HISTORY = 10000;
-let kisTokenCache = null;
 let koreanMasterCache = {
   loadedAt: 0,
   items: []
@@ -260,7 +274,8 @@ function kisStatusPayload() {
     enabled: KIS_ENABLED,
     appKeyConfigured: Boolean(KIS_APP_KEY),
     appSecretConfigured: Boolean(KIS_APP_SECRET),
-    baseUrlConfigured: Boolean(KIS_BASE_URL)
+    baseUrlConfigured: Boolean(KIS_BASE_URL),
+    futuresEnabled: KIS_FUTURES_ENABLED
   };
 }
 
@@ -378,47 +393,9 @@ function marketStatus(symbol, now = new Date()) {
   return "종가";
 }
 
-async function getKisAccessToken() {
-  const now = Date.now();
-  if (kisTokenCache && kisTokenCache.expiresAt - KIS_TOKEN_SAFETY_MS > now) return kisTokenCache.token;
-  if (!KIS_ENABLED) throw new Error("KIS credentials are not configured");
-  const response = await fetchWithTimeout(`${KIS_BASE_URL}/oauth2/tokenP`, 6000, {
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify({
-      grant_type: "client_credentials",
-      appkey: KIS_APP_KEY,
-      appsecret: KIS_APP_SECRET
-    })
-  });
-  if (!response.ok) throw new Error(`KIS token HTTP ${response.status}`);
-  const json = await response.json();
-  if (!json.access_token) throw new Error("KIS token missing");
-  const expiresIn = Number(json.expires_in || 86_400);
-  kisTokenCache = {
-    token: json.access_token,
-    expiresAt: now + expiresIn * 1000
-  };
-  return kisTokenCache.token;
-}
-
 async function kisFetch(path, trId, params) {
-  const token = await getKisAccessToken();
-  const url = new URL(`${KIS_BASE_URL}${path}`);
-  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-  const response = await fetchWithTimeout(url, 5000, {
-    headers: {
-      "authorization": `Bearer ${token}`,
-      "appkey": KIS_APP_KEY,
-      "appsecret": KIS_APP_SECRET,
-      "tr_id": trId,
-      "custtype": "P"
-    }
-  });
-  if (!response.ok) throw new Error(`KIS ${trId} HTTP ${response.status}`);
-  const json = await response.json();
-  if (json.rt_cd && json.rt_cd !== "0") throw new Error(`KIS ${trId} ${json.msg1 || json.rt_cd}`);
-  return json;
+  if (!KIS_ENABLED) throw new Error("KIS credentials are not configured");
+  return mainKisClient.request(path, trId, params);
 }
 
 function parseKisDomesticQuote(symbol, json) {
@@ -1675,6 +1652,7 @@ function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {
 
 async function getIntraday(symbol, interval = "1m", mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
+  if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) return kisFutures.chart(INTERVAL_CONFIG[interval] && isIntradayInterval(interval) ? interval : "1m", 400);
   try {
     const includePrePost = mode === "NTX" && isUsSymbol(normalized);
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=1d&interval=${encodeURIComponent(interval)}&includePrePost=${includePrePost ? "true" : "false"}`;
@@ -1705,6 +1683,14 @@ async function getIntraday(symbol, interval = "1m", mode = "KRX") {
 
 async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", lineBreak = false) {
   const normalized = symbol.trim().toUpperCase();
+  if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) {
+    try {
+      return { ...(await kisFutures.chart(INTERVAL_CONFIG[interval] ? interval : "1d", limit)),
+        kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: true } };
+    } catch (error) {
+      throw Object.assign(new Error(`KIS 선물 시세 조회 실패. 해외선물 API 키·권한과 CME 시세 신청을 확인하세요. ${kisErrorMessage(error)}`), { status: 503 });
+    }
+  }
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
   let kisMeta = {
     ...kisStatusPayload(),
@@ -1981,6 +1967,10 @@ async function getCandles(symbol, limit = 140) {
 
 async function getQuote(symbol, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
+  if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) {
+    try { return { ...(await kisFutures.quote()), kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: true } }; }
+    catch { throw Object.assign(new Error("KIS 선물 현재가 조회 실패. 해외선물 API 키·권한과 CME 시세 신청을 확인하세요."), { status: 503 }); }
+  }
   const kisMeta = {
     ...kisStatusPayload(),
     supported: kisSupportsQuote(normalized, mode),

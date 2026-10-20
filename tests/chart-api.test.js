@@ -10,7 +10,7 @@ test('chart API supplies longer real history for line breaks and never fabricate
   const data=await mkdtemp(join(tmpdir(),'stock8-chart-api-'));
   const root=fileURLToPath(new URL('../',import.meta.url));
   const fixture=fileURLToPath(new URL('./fixtures/chart-upstreams.mjs',import.meta.url));
-  const child=spawn(process.execPath,['--import',fixture,'server.js'],{cwd:root,env:{...process.env,PORT:'0',STOCK8_DATA_DIR:data,STOCK8_PASSWORD:'1222',KIS_APP_KEY:'',KIS_APP_SECRET:''},stdio:['ignore','pipe','pipe']});
+  const child=spawn(process.execPath,['--import',fixture,'server.js'],{cwd:root,env:{...process.env,PORT:'0',STOCK8_DATA_DIR:data,STOCK8_PASSWORD:'1222',KIS_APP_KEY:'',KIS_APP_SECRET:'',KIS_FUTURES_APP_KEY:'',KIS_FUTURES_APP_SECRET:''},stdio:['ignore','pipe','pipe']});
   t.after(async()=>{child.kill();await new Promise(resolve=>child.exitCode!==null?resolve():child.once('exit',resolve));await rm(data,{recursive:true,force:true})});
   const port=await new Promise((resolve,reject)=>{
     let output='';const timer=setTimeout(()=>reject(Error('test server did not start')),10000);
