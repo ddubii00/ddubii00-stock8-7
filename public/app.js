@@ -933,6 +933,8 @@ async function createCard(item, index) {
   const bgCanvas = fragment.querySelector(".macd-bg");
   const id = `card-${index}`;
   card.dataset.cardId = id;
+  card.querySelector('.symbol-title').textContent = item.name || item.symbol;
+  card.querySelector('.symbol-title').title = item.name || item.symbol;
   card.tabIndex = -1;
   chartGrid.append(card);
 

@@ -1673,7 +1673,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       return { ...(await kisFutures.chart(INTERVAL_CONFIG[interval] ? interval : "1d", limit)),
         kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: true } };
     } catch (error) {
-      throw Object.assign(new Error(`KIS 선물 시세 조회 실패. 해외선물 API 키·권한과 CME 시세 신청을 확인하세요. ${kisErrorMessage(error)}`), { status: 503 });
+      throw Object.assign(new Error(`KIS 선물 시세 조회 실패. ${kisErrorMessage(error)}`), { status: 503 });
     }
   }
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
@@ -1966,7 +1966,7 @@ async function getQuote(symbol, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
   if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) {
     try { return { ...(await kisFutures.quote()), kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: true } }; }
-    catch { throw Object.assign(new Error("KIS 선물 현재가 조회 실패. 해외선물 API 키·권한과 CME 시세 신청을 확인하세요."), { status: 503 }); }
+    catch (error) { throw Object.assign(new Error(`KIS 선물 현재가 조회 실패. ${kisErrorMessage(error)}`), { status: 503 }); }
   }
   const kisMeta = {
     ...kisStatusPayload(),

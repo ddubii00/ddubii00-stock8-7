@@ -56,3 +56,14 @@ test('KIS entitlement failures are visible errors and cannot silently turn into 
     assert.doesNotMatch(JSON.stringify(p), /fixture-secret|fixture-token/);
   }
 });
+
+test('HTTP 500 preserves the KIS error code and reason instead of labeling all failures as CME permission errors', async t => {
+  const get = await server(t, 'NQM27');
+  for (const path of ['/api/chart?symbol=NQ%3DF&interval=1m', '/api/quote?symbol=NQ%3DF']) {
+    const response = await get(path); assert.equal(response.status, 503);
+    const p = await response.json();
+    assert.match(p.error, /HHDFC55010000 HTTP 500.*EGW00201.*초당/);
+    assert.doesNotMatch(p.error, /CME|fixture-key|fixture-secret|fixture-token/);
+    assert.equal(p.series, undefined);
+  }
+});

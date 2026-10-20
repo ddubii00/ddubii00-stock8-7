@@ -12,6 +12,7 @@ globalThis.fetch = async (input, options) => {
   if (url.pathname.endsWith('tokenP')) return Response.json({ access_token: 'fixture-token', expires_in: 86400 });
   if (url.pathname.endsWith('Approval')) return Response.json({ approval_key: 'fixture-approval' });
   if (url.searchParams.get('SRS_CD') === 'NQH27') return Response.json({ rt_cd: '1', msg_cd: 'NO_RIGHTS', msg1: 'not subscribed' });
+  if (url.searchParams.get('SRS_CD') === 'NQM27') return Response.json({ rt_cd: '1', msg_cd: 'EGW00201', msg1: '초당 거래건수를 초과하였습니다.' }, {status:500});
   if (url.pathname.endsWith('inquire-price')) return Response.json({ rt_cd: '0', output1: {
     proc_date: current.date, proc_time: current.clock, sbsnsdate: current.date,
     last_price: '30000.75', prev_price: '30100', open_price: '30100', high_price: '30200', low_price: '29900'
