@@ -1,7 +1,7 @@
 import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly } from "./chart-indicators.js";
 import { calculateThreeLineBreak } from "./three-line-break.js";
 import { SharedDashboard } from "./shared-dashboard.js";
-import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS } from "./dashboard-model.js";
+import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount } from "./dashboard-model.js";
 import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
@@ -286,7 +286,7 @@ async function renderPage() {
   chartGrid.replaceChildren();
   document.querySelector("#pageIndicator").textContent = `${activePage + 1} / ${PAGE_COUNT}`;
   const start = activePage * SLOTS_PER_PAGE;
-  const count = LAYOUTS[layoutIndex] === "2x2" ? SLOTS_PER_PAGE : 3;
+  const count = layoutChartCount(LAYOUTS[layoutIndex]);
   await Promise.all(sharedState.slots.slice(start, start + count).map((slot, index) => createCard(slot, start + index)));
   fitChartsToSlots();
 }
@@ -1134,13 +1134,17 @@ sessionButtons.forEach((button) => {
 document.querySelector("#layoutButton").addEventListener("click", () => {
   layoutIndex = (layoutIndex + 1) % LAYOUTS.length;
   chartGrid.dataset.layout = LAYOUTS[layoutIndex];
-  const fourthIndex = activePage * SLOTS_PER_PAGE + 3;
-  const fourthCard = chartState.get(`card-${fourthIndex}`);
-  if (LAYOUTS[layoutIndex] === "2x2") {
-    if (!fourthCard && sharedState) void createCard(sharedState.slots[fourthIndex], fourthIndex).then(fitChartsToSlots);
-  } else if (fourthCard) {
-    disposeCard(fourthCard);
+  const start = activePage * SLOTS_PER_PAGE;
+  const count = layoutChartCount(LAYOUTS[layoutIndex]);
+  for (const state of chartState.values()) {
+    if (state.slotIndex < start || state.slotIndex >= start + count) disposeCard(state);
   }
+  const pending = [];
+  for (let offset = 0; offset < count; offset++) {
+    const index = start + offset;
+    if (!chartState.has(`card-${index}`) && sharedState) pending.push(createCard(sharedState.slots[index], index));
+  }
+  void Promise.all(pending).then(() => { fitChartsToSlots(); scheduleTimeAlignment(); });
   fitChartsToSlots();
   scheduleTimeAlignment();
   const button = document.querySelector("#layoutButton");
