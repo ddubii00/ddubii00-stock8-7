@@ -4,6 +4,7 @@ import { instrumentChanges } from '../public/instrument-settings.js';
 import { createDashboard, applyChanges } from '../public/dashboard-model.js';
 import { manualSearchItem } from '../public/symbol-input.js';
 import { parseYahooSearchResults } from '../lib/symbol-search.js';
+import { validSymbol } from '../public/dashboard-model.js';
 
 test('settings save exactly 20 slots while preserving timeframes and symbol-shared lines', () => {
   const state = createDashboard();
@@ -49,4 +50,24 @@ test('provider search accepts US equities, ETFs and indices but never foreign st
     {symbol:'BTC-USD',quoteType:'CRYPTOCURRENCY',exchange:'CCC',shortname:'Bitcoin'}
   ]);
   assert.deepEqual(result.map(item => item.symbol), ['AAPL.US','QQQ.US','^GSPC']);
+});
+
+test('Nasdaq indices, futures and related ETF names resolve to distinct instruments', () => {
+  const examples={'나스닥지수':'^IXIC','나스닥100지수':'^NDX','나스닥100 선물':'NQ=F','나스닥선물':'NQ=F','NQ':'NQ=F','nq=f':'NQ=F','ＮＱ＝Ｆ':'NQ=F','NASDAQ100 FUTURES':'NQ=F','QQQ':'QQQ.US','QQQM':'QQQM.US','TQQQ':'TQQQ.US','SQQQ':'SQQQ.US'};
+  for(const [query,symbol] of Object.entries(examples))assert.equal(manualSearchItem(query).symbol,symbol,query);
+  assert.equal(validSymbol('NQ=F'),true);
+  for(const invalid of ['NQ=F.US','NQ=F/../../etc','NQ=F?extra=1','nq=f'])assert.equal(validSymbol(invalid),false);
+  const result=parseYahooSearchResults([{symbol:'NQ=F',quoteType:'FUTURE',shortname:'Nasdaq 100 Futures'},{symbol:'NQ=F.US',quoteType:'FUTURE',shortname:'Invalid'}]);
+  assert.deepEqual(result,[{symbol:'NQ=F',name:'Nasdaq 100 Futures'}]);
+});
+
+test('future registration and trend lines survive model serialization with decimals intact',()=>{
+  const state=createDashboard(),draft=structuredClone(state.slots);
+  draft[0]=manualSearchItem('NQ');
+  let saved=applyChanges(state,instrumentChanges(draft,state.slots));
+  const line={id:'nasdaq-future-line',start:{time:1700000000,price:26400.25},end:{time:1700000060,price:26420.75},width:2};
+  saved=applyChanges(saved,[{type:'upsertLine',symbol:'NQ=F',line}]);
+  const reopened=JSON.parse(JSON.stringify(saved));
+  assert.equal(reopened.slots[0].symbol,'NQ=F');assert.equal(reopened.slots[0].decimals,2);
+  assert.deepEqual(reopened.lines['NQ=F'],[line]);
 });

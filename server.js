@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { createEtfSearch } from "./lib/etf-search.js";
 import { createKoreanCodeResolver, parseYahooSearchResults } from "./lib/symbol-search.js";
-import { INSTRUMENT_CATALOG, exactCatalogItem } from "./public/instrument-catalog.js";
+import { INSTRUMENT_CATALOG, exactCatalogItem, isFuturesSymbol } from "./public/instrument-catalog.js";
 import { normalizeSearchQuery, parseKoreanCode, parseUsTicker, manualSearchItem, prioritizeExactInstrument } from "./public/symbol-input.js";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -346,6 +346,7 @@ function forexMarketStatus(now = new Date()) {
 }
 
 function marketStatus(symbol, now = new Date()) {
+  if (isFuturesSymbol(symbol)) return "선물";
   if (isForexSymbol(symbol)) return forexMarketStatus(now);
   if (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -1620,7 +1621,8 @@ async function searchSymbols(query) {
   query = normalizeSearchQuery(query);
   if (!query) return [];
   const known = exactCatalogItem(query);
-  if (known) return [known];
+  // A family-name search should show the index, futures and related ETFs.
+  if (known && !/나스닥|NASDAQ/i.test(query)) return [known];
   const korean = parseKoreanCode(query);
   if (korean) {
     const exact = await resolveKoreanCode(query);
@@ -1684,6 +1686,7 @@ async function getIntraday(symbol, interval = "1m", mode = "KRX") {
     if (!payload.series.length) throw new Error("No intraday data");
     return payload;
   } catch {
+    if (isFuturesSymbol(normalized)) throw Object.assign(new Error("선물 시세 데이터를 받지 못했습니다."), { status: 503 });
     const series = fallbackCandles(normalized, 96, 60);
     const previousClose = series[0].open;
     const price = series.at(-1).close;
@@ -1940,6 +1943,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       series: trimmed
     };
   } catch (error) {
+    if (isFuturesSymbol(normalized)) throw Object.assign(new Error("선물 시세 데이터를 받지 못했습니다."), { status: 503 });
     if (lineBreak) throw Object.assign(new Error("삼선전환도를 계산할 실제 시세 데이터를 받지 못했습니다."), { status: 503 });
     if (kisMeta.attempted && !kisMeta.ok && !kisMeta.error) kisMeta.error = kisErrorMessage(error);
     const series = fallbackCandles(normalized, limit, config.seconds);

@@ -28,6 +28,27 @@ test('chart API supplies longer real history for line breaks and never fabricate
     if (query==='하이닉스') assert.ok(results.some(item=>item.name.includes('ETF')));
   }
   const chart=path=>fetch(base+'/api/chart?'+path,{headers});
+  const family=await(await fetch(base+'/api/search?q='+encodeURIComponent('나스닥'),{headers})).json();
+  for(const symbol of ['^IXIC','^NDX','NQ=F','QQQ.US','QQQM.US','TQQQ.US','SQQQ.US','133690.KS'])assert.ok(family.results.some(item=>item.symbol===symbol),symbol);
+  for(const query of ['나스닥100 선물','NQ','NQ=F']) {
+    const search=await(await fetch(base+'/api/search?q='+encodeURIComponent(query),{headers})).json();
+    assert.equal(search.results[0].symbol,'NQ=F');
+  }
+  for(const interval of ['1m','1d','1wk']) {
+    const response=await chart(`symbol=NQ%3DF&interval=${interval}&limit=400`);
+    assert.equal(response.status,200);
+    const future=await response.json();assert.equal(future.symbol,'NQ=F');assert.equal(future.decimals,2);
+    assert.equal(future.marketStatus,'선물');assert.ok(future.series.some(row=>row.close%1===.25));
+  }
+  const save=await fetch(base+'/api/state',{method:'PATCH',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({id:'register-futures',changes:[{type:'slot',index:0,patch:{symbol:'NQ=F',name:'나스닥100 선물',decimals:2}}]})});
+  assert.equal(save.status,200);assert.equal((await save.json()).slots[0].symbol,'NQ=F');
+  const unavailableFuture=await chart('symbol=FAIL%3DF&interval=1m');
+  assert.equal(unavailableFuture.status,503);assert.match((await unavailableFuture.json()).error,/선물 시세/);
+  const futureQuote=await(await fetch(base+'/api/quote?symbol=NQ%3DF',{headers})).json();
+  assert.equal(futureQuote.symbol,'NQ=F');assert.equal(futureQuote.marketStatus,'선물');
+  const futureLines=await(await chart('symbol=NQ%3DF&interval=1m&limit=10000&chartType=line-break')).json();
+  assert.equal(futureLines.series.length,2000);assert.equal(futureLines.decimals,2);
+  assert.equal((await(await fetch(base+'/api/state',{headers})).json()).slots[0].symbol,'NQ=F');
   const normal=await(await chart('symbol=AAPL.US&interval=1m&limit=10000')).json();
   assert.equal(normal.series.length,700);
   for (const interval of ['1m','1d','1wk']) {

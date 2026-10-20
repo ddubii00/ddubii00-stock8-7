@@ -5,6 +5,7 @@ import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS } from "./dashboard-model.js";
 import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
+import { isFuturesSymbol } from "./instrument-catalog.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -145,7 +146,7 @@ function isKoreanIndex(symbol) {
 }
 
 function priceDecimalsForSymbol(symbol) {
-  if (symbol?.startsWith("^") || symbol === "KRW=X" || symbol?.endsWith(".US")) {
+  if (symbol?.startsWith("^") || symbol === "KRW=X" || symbol?.endsWith(".US") || isFuturesSymbol(symbol)) {
     return 2;
   }
   return CHART_PRICE_DECIMALS;
@@ -153,7 +154,7 @@ function priceDecimalsForSymbol(symbol) {
 
 function priceFormatForSymbol(symbol) {
   const precision = priceDecimalsForSymbol(symbol);
-  return { type: "price", precision, minMove: precision === 2 ? 0.01 : 1 };
+  return { type: "price", precision, minMove: symbol === "NQ=F" ? 0.25 : precision === 2 ? 0.01 : 1 };
 }
 
 function showSaveStatus(status, message = "") {

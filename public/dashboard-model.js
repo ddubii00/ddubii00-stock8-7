@@ -1,3 +1,5 @@
+import { isFuturesSymbol } from './instrument-catalog.js';
+
 export const PAGE_COUNT = 5;
 export const SLOTS_PER_PAGE = 4;
 export const LAYOUTS = ['2x2', '1x3', '3x1'];
@@ -11,7 +13,7 @@ const DEFAULTS = [
 ];
 const invalid = () => { throw new Error('저장할 정보 형식이 올바르지 않습니다.'); };
 export function validSymbol(symbol) {
-  return typeof symbol === 'string' && /^(?:[0-9][A-Z0-9]{5}\.(?:KS|KQ)|[A-Z][A-Z0-9.-]{0,12}\.US|\^[A-Z0-9]{1,12}|KRW=X)$/.test(symbol);
+  return isFuturesSymbol(symbol) || (typeof symbol === 'string' && /^(?:[0-9][A-Z0-9]{5}\.(?:KS|KQ)|[A-Z][A-Z0-9.-]{0,12}\.US|\^[A-Z0-9]{1,12}|KRW=X)$/.test(symbol));
 }
 export function createDashboard() {
   return {
