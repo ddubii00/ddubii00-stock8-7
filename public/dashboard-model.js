@@ -2,7 +2,7 @@ import { isFuturesSymbol } from './instrument-catalog.js';
 
 export const PAGE_COUNT = 5;
 export const SLOTS_PER_PAGE = 4;
-export const LAYOUTS = ['2x2', '1x3', '3x1', '1x1', '2x1'];
+export const LAYOUTS = ['2x2', '1x3', '3x1', '1x1', '2x1', '1x2'];
 export function layoutChartCount(layout) {
   const [columns, rows] = layout.split('x').map(Number);
   return columns * rows;

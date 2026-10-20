@@ -87,7 +87,8 @@ let hoveredChart = null;
 function syncVerticalCursor() {
   for (const state of chartState.values()) {
     const sameGroup = !showLineBreak && hoveredChart && state !== hoveredChart.state && state.alignment && state.alignment === hoveredChart.state.alignment;
-    const targetTime = sameGroup ? cursorTimeForChart(state.rows, state.interval, hoveredChart.time) : null;
+    const timeZone = isKoreanSymbol(state.item.symbol) || isKoreanIndex(state.item.symbol) ? 'Asia/Seoul' : 'America/New_York';
+    const targetTime = sameGroup ? cursorTimeForChart(state.rows, state.interval, hoveredChart.time, timeZone) : null;
     const x = targetTime != null ? state.instance.chart.timeScale().timeToCoordinate(targetTime) : null;
     const visible = Number.isFinite(x) && x >= 0 && x <= state.instance.chart.timeScale().width();
     state.syncCursor.hidden = !visible;

@@ -20,13 +20,13 @@ test('400 means 400 real bars for each chart, including missing minutes and exte
   assert.equal(620 - visibleLogicalRange(620, 400).from, 400);
 });
 
-test('cursor groups use left column slots 1/2 and right column slots 3/4; every other layout respects its visible cards', () => {
+test('all visible charts share cursor time in every layout, including both 2x2 columns', () => {
   const charts = Array.from({ length: 4 }, (_, i) => chart(i, [1, 2, 3 + i]));
-  assert.deepEqual(buildCursorGroups(charts, '2x2').map(group => group.members.map(item => item.slotIndex)), [[0, 1], [2, 3]]);
+  assert.deepEqual(buildCursorGroups(charts, '2x2').map(group => group.members.map(item => item.slotIndex)), [[0, 1, 2, 3]]);
   for (const layout of ['1x3', '3x1']) assert.deepEqual(buildCursorGroups(charts.slice(0, 3), layout)[0].members.map(item => item.slotIndex), [0, 1, 2]);
   assert.equal(buildCursorGroups(charts.slice(0, 1), '1x1').length, 0);
-  assert.deepEqual(buildCursorGroups(charts.slice(0, 2), '2x1')[0].members.map(item => item.slotIndex), [0, 1]);
-  assert.deepEqual(buildCursorGroups(charts.map(item => ({ ...item, slotIndex: item.slotIndex + 4 })), '2x2').map(group => group.members.map(item => item.slotIndex)), [[4, 5], [6, 7]]);
+  for (const layout of ['2x1', '1x2']) assert.deepEqual(buildCursorGroups(charts.slice(0, 2), layout)[0].members.map(item => item.slotIndex), [0, 1]);
+  assert.deepEqual(buildCursorGroups(charts.map(item => ({ ...item, slotIndex: item.slotIndex + 4 })), '2x2').map(group => group.members.map(item => item.slotIndex)), [[4, 5, 6, 7]]);
 });
 
 test('changing the bottom-right bar count or timeframe cannot change the top-right viewport', () => {
@@ -39,7 +39,7 @@ test('changing the bottom-right bar count or timeframe cannot change the top-rig
   assert.deepEqual(visibleLogicalRange(top.rows.length, top.limit), original);
   assert.equal(bottom.rows.length - visibleLogicalRange(bottom.rows.length, bottom.limit).from, 80);
   bottom.limit = 400; bottom.interval = '1d';
-  assert.equal(buildCursorGroups([top, bottom]).length, 0);
+  assert.equal(buildCursorGroups([top, bottom]).length, 1);
   assert.deepEqual(visibleLogicalRange(top.rows.length, top.limit), original);
   assert.deepEqual(visibleLogicalRange(30, 400), { from: 0, to: 31 });
   assert.equal(visibleLogicalRange(0, 400), null);
@@ -64,7 +64,22 @@ test('cursor matching does not bridge a session gap or point at a nonexistent ca
   assert.equal(cursorTimeForChart(rows, '5m', -1), null);
   assert.equal(cursorTimeForChart(rows, '5m', 600), null);
   assert.equal(cursorTimeForChart(rows, '5m', 86400 + 300), null);
-  assert.equal(cursorTimeForChart(rows, '1d', 301), null);
+  assert.equal(cursorTimeForChart([{time: 0}, {time: 86400}], '1d', 172800), null);
   assert.equal(cursorTimeForChart(rows, '1d', 86400), 86400);
   assert.equal(cursorTimeForChart([], '5m', 300), null);
+});
+
+
+test('intraday cursors select the corresponding daily, weekly and monthly trading-date bar', () => {
+  const source = Date.parse('2026-10-20T14:31:00+09:00') / 1000;
+  const daily = Date.parse('2026-10-20T00:00:00Z') / 1000;
+  const weekly = Date.parse('2026-10-19T00:00:00Z') / 1000;
+  const monthly = Date.parse('2026-10-01T00:00:00Z') / 1000;
+  for (const [interval, time] of [['1d', daily], ['1wk', weekly], ['1mo', monthly]]) {
+    assert.equal(cursorTimeForChart([{time}], interval, source, 'Asia/Seoul'), time);
+  }
+  assert.equal(cursorTimeForChart([{time: daily - 86400}], '1d', source, 'Asia/Seoul'), null);
+  const usOpen = Date.parse('2026-10-20T13:30:00Z') / 1000;
+  const usPremarket = Date.parse('2026-10-20T12:00:00Z') / 1000;
+  assert.equal(cursorTimeForChart([{time: usOpen}], '1d', usPremarket, 'America/New_York'), usOpen);
 });

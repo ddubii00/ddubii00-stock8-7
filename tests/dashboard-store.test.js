@@ -10,7 +10,7 @@ const line = (id) => ({id,start:{time:1700000000,price:100},end:{time:1700086400
 test('five independent pages default to four charts and the exact layout cycle', () => {
   const state = createDashboard();
   assert.equal(state.slots.length, 20);
-  assert.deepEqual(LAYOUTS, ['2x2','1x3','3x1','1x1','2x1']);
+  assert.deepEqual(LAYOUTS, ['2x2','1x3','3x1','1x1','2x1','1x2']);
   const next = applyChanges(state,[{type:'slot',index:4,patch:{symbol:'000660.KS',name:'SK하이닉스'}}]);
   assert.equal(next.slots[0].symbol, next.slots[4].symbol);
   assert.equal(state.slots[4].symbol,'NVDA.US');
