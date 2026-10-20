@@ -3,7 +3,8 @@ import { calculateThreeLineBreak } from "./three-line-break.js";
 import { SharedDashboard } from "./shared-dashboard.js";
 import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS } from "./dashboard-model.js";
 import { TrendEditor } from "./trend-editor.js";
-import { manualSearchItem, searchResultsWithFallback, prioritizeExactInstrument } from "./symbol-input.js";
+import { InstrumentSettings } from "./instrument-settings.js";
+import { mergeCandleHistory } from "./chart-history.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -52,6 +53,8 @@ const CHART_RIGHT_OFFSET = 2;
 const CHART_BAR_SPACING = 6;
 const PRICE_SCALE_WIDTH = 82;
 const FETCH_LIMIT = 700;
+const LINE_BREAK_FETCH_LIMIT = 10000;
+const candleHistories = new Map();
 const NTX_VISIBLE_LIMIT = 620;
 const INTERVAL_SECONDS = {
   "1m": 60,
@@ -168,27 +171,26 @@ function persistSlot(state, patch) {
 function applySharedState(value) {
   const first = !sharedState;
   sharedState = value;
+  document.querySelector("#instrumentsButton").disabled = false;
   if (first) { void renderPage(); return; }
   for (const state of chartState.values()) {
     if (state.disposed) continue;
     const slot = value.slots[state.slotIndex];
-    if (!isSymbolEditing(state)) {
-      const interval = globalWeekly && !state.weeklyLocal ? "1wk" : slot.interval;
-      const limit = globalWeekly && !state.weeklyLocal ? state.limit : slot.limit;
-      const changed = state.item.symbol !== slot.symbol || state.interval !== interval || state.limit !== limit;
-      const symbolChanged = state.item.symbol !== slot.symbol;
-      state.item = { symbol: slot.symbol, name: slot.name, decimals: slot.decimals };
-      state.restoreInterval = slot.interval;
-      state.restoreLimit = slot.limit;
-      state.interval = interval;
-      state.limit = limit;
-      if (changed) {
-        if (symbolChanged) state.trendEditor?.reset();
-        state.card.querySelector(".symbol-input").value = slot.name;
-        state.card.querySelector(".period-input").value = String(limit);
-        renderTimeframeButtons(state.card, state);
-        void refreshCard(state, true);
-      }
+    const interval = globalWeekly && !state.weeklyLocal ? "1wk" : slot.interval;
+    const limit = globalWeekly && !state.weeklyLocal ? state.limit : slot.limit;
+    const changed = state.item.symbol !== slot.symbol || state.interval !== interval || state.limit !== limit;
+    const symbolChanged = state.item.symbol !== slot.symbol;
+    state.item = { symbol: slot.symbol, name: slot.name, decimals: slot.decimals };
+    state.restoreInterval = slot.interval;
+    state.restoreLimit = slot.limit;
+    state.interval = interval;
+    state.limit = limit;
+    if (changed) {
+      if (symbolChanged) state.trendEditor?.reset();
+      state.card.querySelector(".symbol-title").textContent = slot.name;
+      state.card.querySelector(".period-input").value = String(limit);
+      renderTimeframeButtons(state.card, state);
+      void refreshCard(state, true);
     }
     state.trendEditor?.schedule();
   }
@@ -228,11 +230,6 @@ function formatAxisPrice(value, symbol) {
     return `${formatNumber(Math.round(number / 1_000), 0)}k`;
   }
   return formatNumber(number, priceDecimalsForSymbol(symbol));
-}
-
-function isSymbolEditing(state) {
-  const input = state.card.querySelector(".symbol-input");
-  return state.isEditingSymbol || document.activeElement === input;
 }
 
 function formatTooltipTime(interval, time) {
@@ -504,8 +501,9 @@ function localDateKeyForSymbol(symbol, timestamp) {
 }
 
 function shouldIgnoreIntradayPayload(state, rows, initial) {
-  if (initial || !isIntraday(state.interval) || !state.sourceRows?.length || !rows?.length) return false;
-  const previousLatest = state.sourceRows.at(-1);
+  const previous = state.latestSourceRows || state.sourceRows;
+  if (initial || !isIntraday(state.interval) || !previous?.length || !rows?.length) return false;
+  const previousLatest = previous.at(-1);
   const nextLatest = rows.at(-1);
   if (!previousLatest || !nextLatest) return false;
   const previousTime = Number(previousLatest.time);
@@ -518,7 +516,7 @@ function shouldIgnoreIntradayPayload(state, rows, initial) {
   const sameTailDate = Number.isFinite(priorNextTime)
     && localDateKeyForSymbol(state.item.symbol, priorNextTime) === localDateKeyForSymbol(state.item.symbol, nextTime);
   if (sameTailDate && nextTime - priorNextTime > seconds * 2.5) return true;
-  if (rows.length < Math.max(30, state.sourceRows.length * 0.75)) return true;
+  if (rows.length < Math.max(30, previous.length * 0.75)) return true;
   return false;
 }
 
@@ -650,10 +648,8 @@ function renderLegend(state, payload) {
   const decimals = priceDecimalsForSymbol(payload.symbol || state.item.symbol);
   const card = state.card;
 
-  if (!isSymbolEditing(state)) {
-    card.querySelector(".symbol-input").value = payload.name || payload.symbol;
-  }
-  card.querySelector(".symbol-input").title = payload.name || payload.symbol;
+  card.querySelector(".symbol-title").textContent = state.item.name || payload.name || payload.symbol;
+  card.querySelector(".symbol-title").title = state.item.name || payload.name || payload.symbol;
   const priceEl = card.querySelector(".last-price");
   priceEl.textContent = formatNumber(payload.price ?? last?.close, decimals);
   priceEl.className = `last-price ${direction}`;
@@ -665,11 +661,19 @@ function renderLegend(state, payload) {
 }
 
 function applyPayload(state, payload, initial = false) {
-  const sourceRows = payload.series || [];
-  if (!sourceRows.length) return;
+  let sourceRows = payload.series || [];
+  if (!sourceRows.length) throw new Error("시세 데이터가 없습니다.");
+  if (showLineBreak && /^fallback/.test(payload.source || "")) throw new Error("실제 시세 데이터를 받지 못했습니다.");
   const previousLastTime = state.rows?.at(-1)?.time;
   if (shouldIgnoreIntradayPayload(state, sourceRows, initial)) return;
-  const rows = showLineBreak ? calculateThreeLineBreak(sourceRows) : sourceRows;
+  state.latestSourceRows = sourceRows;
+  if (showLineBreak) {
+    const historyKey = `${state.item.symbol}:${state.interval}:${sessionMode}`;
+    sourceRows = mergeCandleHistory(candleHistories.get(historyKey) || [], sourceRows);
+    if (!candleHistories.has(historyKey) && candleHistories.size >= 60) candleHistories.delete(candleHistories.keys().next().value);
+    candleHistories.set(historyKey, sourceRows);
+  }
+  const rows = showLineBreak ? calculateThreeLineBreak(sourceRows, priceDecimalsForSymbol(state.item.symbol)) : sourceRows;
   const latest = rows.at(-1);
   state.lastPayload = payload;
   state.lastPayloadKey = chartRequestKey(state);
@@ -732,6 +736,8 @@ function applyPayload(state, payload, initial = false) {
   if (initial || isIntraday(state.interval)) keepLatestVisible(state);
   requestAnimationFrame(() => drawMacdBackground(state));
   state.card.classList.add("loaded");
+  state.card.classList.toggle("no-line-break", showLineBreak && !rows.length);
+  if (showLineBreak && !rows.length) state.card.querySelector(".loading").textContent = "삼선 돌파가 없습니다";
   syncPriceScaleWidths();
   state.trendEditor?.schedule();
 }
@@ -741,7 +747,8 @@ async function fetchChart(state) {
     symbol: state.item.symbol,
     name: state.item.name,
     interval: state.interval,
-    limit: String(Math.max(FETCH_LIMIT, state.limit + WARMUP_BARS)),
+    limit: String(showLineBreak ? LINE_BREAK_FETCH_LIMIT : Math.max(FETCH_LIMIT, state.limit + WARMUP_BARS)),
+    chartType: showLineBreak ? "line-break" : "candles",
     mode: sessionMode
   });
   const response = await fetch(`/stock8-7/api/chart?${params.toString()}`);
@@ -750,7 +757,7 @@ async function fetchChart(state) {
 }
 
 function chartRequestKey(state) {
-  return `${state.item.symbol}:${state.interval}:${state.limit}:${sessionMode}`;
+  return `${state.item.symbol}:${state.interval}:${state.limit}:${sessionMode}:${showLineBreak}`;
 }
 
 async function refreshCard(state, initial = false) {
@@ -768,120 +775,17 @@ async function refreshCard(state, initial = false) {
     if (state.disposed || requestId !== state.requestId || key !== chartRequestKey(state)) return;
     state.item = {
       symbol: payload.symbol,
-      name: payload.name,
+      name: state.item.name || payload.name,
       decimals: payload.decimals
     };
     applyPayload(state, payload, initial);
-  } catch {
+  } catch (error) {
     if (!state.disposed && requestId === state.requestId && key === chartRequestKey(state)) {
-      state.card.querySelector(".loading").textContent = "데이터 오류";
+      state.card.querySelector(".loading").textContent = error.message || "데이터 오류";
     }
   } finally {
     if (requestId === state.requestId) state.pendingKey = null;
   }
-}
-
-function closeSuggestions(card) {
-  card.querySelector(".suggestions").classList.remove("open");
-  const state = chartState.get(card.dataset.cardId);
-  if (state) state.searchRequest = (state.searchRequest || 0) + 1;
-}
-
-async function selectSearchItem(card, item) {
-  const state = chartState.get(card.dataset.cardId);
-  const input = card.querySelector(".symbol-input");
-  state.item = {
-    symbol: item.symbol,
-    name: item.name,
-    decimals: item.symbol.endsWith(".KS") || item.symbol.endsWith(".KQ") ? 0 : 2
-  };
-  state.isEditingSymbol = false;
-  state.trendEditor?.reset();
-  input.value = item.name;
-  input.blur();
-  closeSuggestions(card);
-  persistSlot(state, state.item);
-  await refreshCard(state, true);
-}
-
-document.addEventListener("pointerdown", (event) => {
-  document.querySelectorAll(".chart-card").forEach((card) => {
-    if (!card.querySelector(".symbol-search")?.contains(event.target)) closeSuggestions(card);
-  });
-});
-
-async function showSuggestions(card, query) {
-  const state = chartState.get(card.dataset.cardId);
-  const requestId = state.searchRequest = (state.searchRequest || 0) + 1;
-  const suggestions = card.querySelector(".suggestions");
-  suggestions.replaceChildren();
-  suggestions.classList.remove("open");
-  const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(query)}`);
-  const json = await response.json();
-  if (state.disposed || requestId !== state.searchRequest || card.querySelector(".symbol-input").value !== query) return;
-  const results = prioritizeExactInstrument(searchResultsWithFallback(json.results, query), query);
-  suggestions.replaceChildren(
-    ...results.map((item) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "suggestion";
-      const name = document.createElement("b");
-      name.textContent = item.name;
-      const symbol = document.createElement("span");
-      symbol.textContent = item.symbol;
-      button.append(name, symbol);
-      button.addEventListener("mousedown", async (event) => {
-        event.preventDefault();
-        await selectSearchItem(card, item);
-      });
-      return button;
-    })
-  );
-  suggestions.classList.toggle("open", results.length > 0);
-}
-
-function bindSearch(card) {
-  const input = card.querySelector(".symbol-input");
-  const suggestions = card.querySelector(".suggestions");
-  const state = chartState.get(card.dataset.cardId);
-  suggestions.addEventListener("pointerdown", (event) => event.stopPropagation());
-  input.addEventListener("focus", () => {
-    state.isEditingSymbol = true;
-    showSuggestions(card, input.value).catch(() => closeSuggestions(card));
-  });
-  input.addEventListener("input", () => {
-    state.isEditingSymbol = true;
-    showSuggestions(card, input.value).catch(() => closeSuggestions(card));
-  });
-  input.addEventListener("keydown", async (event) => {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    const first = card.querySelector(".suggestion");
-    if (first) {
-      first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-      return;
-    }
-    const query = input.value;
-    const requestId = state.searchRequest = (state.searchRequest || 0) + 1;
-    let results = [];
-    try {
-      const response = await fetch(`/stock8-7/api/search?q=${encodeURIComponent(query)}`);
-      results = (await response.json()).results || [];
-    } catch {
-      // Direct symbol entry remains available if the search provider fails.
-    }
-    if (requestId !== state.searchRequest || input.value !== query) return;
-    const item = prioritizeExactInstrument(results, query)[0] || manualSearchItem(query);
-    if (item) await selectSearchItem(card, item);
-  });
-  input.addEventListener("blur", () => {
-    setTimeout(() => {
-      if (document.activeElement === input || state.disposed) return;
-      closeSuggestions(card);
-      state.isEditingSymbol = false;
-      if (sharedState && !state.disposed) applySharedState(sharedState);
-    }, 240);
-  });
 }
 
 function bindLegend(card, state) {
@@ -983,7 +887,6 @@ async function createCard(item, index) {
   state.instance.chart.subscribeCrosshairMove((param) => showTooltip(state, param));
 
   chartState.set(id, state);
-  bindSearch(card);
   card.querySelectorAll(".ma-legend button[data-series]").forEach((button) => {
     button.setAttribute("aria-pressed", String(state.visible[button.dataset.series]));
     const period = Number(button.dataset.series.replace("ma", ""));
@@ -1056,7 +959,7 @@ async function refreshAll(initial = false) {
   if (!initial && chartRefreshInFlight) return;
   chartRefreshInFlight = true;
   try {
-    const states = [...chartState.values()].filter((state) => initial || !isSymbolEditing(state));
+    const states = [...chartState.values()];
     await Promise.all(states.map((state) => refreshCard(state, initial)));
   } finally {
     chartRefreshInFlight = false;
@@ -1087,9 +990,9 @@ document.querySelectorAll(".chart-toggle").forEach((button) => {
         state.card.querySelector(".period-input").value = String(state.limit);
         renderTimeframeButtons(state.card, state);
         await refreshCard(state, true);
-      } else if (state.lastPayload && state.lastPayloadKey === chartRequestKey(state)) {
+      } else if (feature === "line-break") {
         state.trendEditor?.reset();
-        applyPayload(state, state.lastPayload, true);
+        await refreshCard(state, true);
       }
       requestAnimationFrame(() => drawMacdBackground(state));
     }));
@@ -1126,6 +1029,8 @@ document.querySelector("#nextButton").addEventListener("click", () => {
   activePage = (activePage + 1) % PAGE_COUNT;
   void renderPage();
 });
+
+new InstrumentSettings(() => sharedState, (changes) => shared.change(changes));
 
 updateSessionButtons();
 try {

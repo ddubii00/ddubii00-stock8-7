@@ -385,16 +385,11 @@ body {
   max-width: 100%;
 }
 
-.symbol-search {
-  position: relative;
-  z-index: 8;
-  pointer-events: auto;
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 100%;
-}
-
-.symbol-input {
+.symbol-title {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   width: 100%;
   height: 24px;
   padding: 2px 6px;
@@ -407,59 +402,6 @@ body {
   font-weight: 800;
   line-height: 1;
   outline: none;
-}
-
-.symbol-input:focus {
-  border-color: var(--accent);
-  background: #fff;
-  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.14);
-}
-
-.suggestions {
-  position: absolute;
-  top: calc(100% + 3px);
-  left: 0;
-  z-index: 20;
-  display: none;
-  width: 190px;
-  max-height: 180px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-}
-
-.suggestions.open {
-  display: block;
-}
-
-.suggestion {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 9px;
-  border: 0;
-  background: #fff;
-  color: var(--text);
-  font-family: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.suggestion:hover {
-  background: #f0f4ff;
-}
-
-.suggestion b {
-  font-size: 12px;
-}
-
-.suggestion span {
-  color: var(--muted);
-  font-size: 11px;
 }
 
 .quote-tools {
@@ -695,16 +637,20 @@ body {
 .chart-grid[data-layout] > .chart-card { height: 100%; }
 
 @media (max-width: 400px) {
-  .header-actions { gap: 3px; }
+  .app-header { padding-left: 6px; padding-right: 6px; }
+  .header-actions { gap: 2px; }
+  .navigation-controls { gap: 2px; }
+  .feature-toggle, .session-toggle { gap: 1px; }
+  #pageIndicator { padding: 0 1px; }
   .header-actions .chart-toggle,
   .header-actions .session-button { min-width: 30px; padding: 0 4px; font-size: 10px; }
-  .navigation-controls button { padding: 0 5px; font-size: 10px; }
+  .navigation-controls button { padding: 0 4px; font-size: 10px; }
 }
 
 @container (max-width: 360px) {
   .card-controls, .chart-overlay { margin-right: 10px; }
   .tf-button { height: 18px; padding: 0 3px; font-size: 10px; }
-  .symbol-input { height: 22px; font-size: 13px; }
+  .symbol-title { height: 22px; font-size: 13px; }
   .last-price { font-size: 14px; }
 }
 
@@ -727,7 +673,7 @@ body {
   .period-control { gap: 3px; font-size: 9px; }
   .period-control input { width: 42px; height: 16px; font-size: 10px; }
   .chart-overlay { margin-top: 2px; gap: 2px; }
-  .symbol-input { height: 18px; font-size: 12px; }
+  .symbol-title { height: 18px; font-size: 12px; }
   .ohlc-legend { gap: 3px; }
   .last-price { font-size: 12px; }
   .last-change { font-size: 10px; }
@@ -737,3 +683,28 @@ body {
   .ma-legend i { width: 6px; }
   .ma-legend .trend-toolbar button { height: 16px; padding: 0 2px; }
 }
+
+#instrumentsDialog { width: min(760px, calc(100% - 20px)); max-height: calc(100dvh - 20px); margin: auto; padding: 16px; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: #fff; overflow: auto; }
+#instrumentsDialog::backdrop { background: rgba(15, 23, 42, .4); }
+.settings-heading, .settings-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.settings-heading h2 { font-size: 18px; }
+.settings-help { margin: 10px 0; color: var(--muted); font-size: 12px; }
+#instrumentPages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+#instrumentPages fieldset { min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
+#instrumentPages legend { padding: 0 4px; font-weight: 700; }
+.instrument-setting { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 2px 6px; align-items: center; margin-bottom: 8px; }
+.instrument-setting label { font-size: 11px; }
+.instrument-setting input { min-width: 0; width: 100%; height: 30px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; font: inherit; }
+.instrument-setting input[aria-invalid="true"] { border-color: #dc2626; }
+.instrument-setting small, .instrument-results { grid-column: 2; min-width: 0; }
+.instrument-setting small { color: var(--muted); font-size: 10px; }
+.instrument-results:not(:empty) { max-height: 160px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; }
+#instrumentsDialog button { padding: 5px 9px; border: 1px solid var(--border); border-radius: 4px; background: #fff; color: var(--text); font: inherit; cursor: pointer; }
+#instrumentsDialog .instrument-results button { display: block; width: 100%; border: 0; border-radius: 0; font-size: 12px; text-align: left; overflow-wrap: anywhere; }
+#instrumentsDialog .instrument-results button:hover, #instrumentsDialog .instrument-results button[aria-selected="true"] { background: #eaf1ff; }
+#instrumentsError { color: #dc2626; font-size: 12px; margin-top: 8px; }
+.settings-actions { justify-content: flex-end; margin-top: 12px; }
+#instrumentsDialog #saveInstruments { background: var(--accent); color: white; }
+#instrumentsDialog button:disabled { opacity: .5; cursor: default; }
+@media (max-width: 560px) { #instrumentPages { grid-template-columns: minmax(0, 1fr); } }
+.chart-card.loaded.no-line-break .loading { display: block; }

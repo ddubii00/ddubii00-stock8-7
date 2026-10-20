@@ -1,3 +1,5 @@
+import { exactCatalogItem } from './instrument-catalog.js';
+
 export function normalizeSearchQuery(value) {
   return String(value || '').normalize('NFKC').trim();
 }
@@ -21,6 +23,9 @@ export function manualSearchItem(value) {
   const query = normalizeSearchQuery(value);
   if (!query) return null;
   const upper = query.toUpperCase();
+  const known = exactCatalogItem(query);
+  if (known) return { symbol: known.symbol, name: known.name };
+  if (/^\^[A-Z0-9]{1,12}$/.test(upper)) return { symbol: upper, name: upper };
   if (['KOSPI', '코스피', '^KS11'].includes(upper)) return {symbol:'^KS11', name:'KOSPI'};
   if (['KOSDAQ', '코스닥', '^KQ11'].includes(upper)) return {symbol:'^KQ11', name:'KOSDAQ'};
   if (['NASDAQ', '나스닥', '^IXIC'].includes(upper)) return {symbol:'^IXIC', name:'나스닥'};

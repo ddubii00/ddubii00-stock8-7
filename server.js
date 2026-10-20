@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { createEtfSearch } from "./lib/etf-search.js";
-import { createKoreanCodeResolver } from "./lib/symbol-search.js";
+import { createKoreanCodeResolver, parseYahooSearchResults } from "./lib/symbol-search.js";
+import { INSTRUMENT_CATALOG, exactCatalogItem } from "./public/instrument-catalog.js";
 import { normalizeSearchQuery, parseKoreanCode, parseUsTicker, manualSearchItem, prioritizeExactInstrument } from "./public/symbol-input.js";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -19,6 +20,7 @@ const KIS_BASE_URL = (process.env.KIS_BASE_URL || "https://openapi.koreainvestme
 const KIS_ENABLED = Boolean(KIS_APP_KEY && KIS_APP_SECRET && KIS_BASE_URL);
 const KIS_TOKEN_SAFETY_MS = 60_000;
 const MAX_QUERY_LIMIT = 700;
+const MAX_LINE_BREAK_HISTORY = 10000;
 let kisTokenCache = null;
 let koreanMasterCache = {
   loadedAt: 0,
@@ -1458,7 +1460,7 @@ function staticSearch(query) {
   const q = query.trim().toLowerCase();
   const compact = compactText(q);
   if (!compact) return [];
-  const matches = SYMBOL_SEARCH
+  const matches = [...INSTRUMENT_CATALOG, ...SYMBOL_SEARCH]
     .map((item) => {
       const values = [item.symbol, item.symbol.replace(".US", ""), item.symbol.replace(/\.(KS|KQ|US)$/, ""), item.name, ...(item.aliases || [])];
       const compactValues = values.map(compactText);
@@ -1596,8 +1598,7 @@ async function searchNaverWebSymbols(query) {
 }
 
 async function searchUsSymbols(query) {
-  if (!/[a-zA-Z]/.test(query)) return [];
-  const usExchanges = new Set(["NYQ", "NYS", "NMS", "NGM", "NCM", "NAS", "ASE", "PCX", "BTS"]);
+  if (!query.trim()) return [];
   const ticker = parseUsTicker(query);
   const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker || query)}&quotesCount=12&newsCount=0`;
   try {
@@ -1606,13 +1607,7 @@ async function searchUsSymbols(query) {
     });
     if (!response.ok) return [];
     const json = await response.json();
-    return (json.quotes || [])
-      .filter((quote) => ["EQUITY", "ETF"].includes(quote.quoteType) && quote.symbol && (quote.shortname || quote.longname))
-      .filter((quote) => usExchanges.has(quote.exchange) && !String(quote.symbol).includes("."))
-      .map((quote) => ({
-        symbol: `${String(quote.symbol).toUpperCase()}.US`,
-        name: String(quote.shortname || quote.longname || quote.symbol)
-      }));
+    return parseYahooSearchResults(json.quotes);
   } catch {
     return [];
   }
@@ -1624,6 +1619,8 @@ const resolveKoreanCode = createKoreanCodeResolver(fetchWithTimeout, SYMBOL_NAME
 async function searchSymbols(query) {
   query = normalizeSearchQuery(query);
   if (!query) return [];
+  const known = exactCatalogItem(query);
+  if (known) return [known];
   const korean = parseKoreanCode(query);
   if (korean) {
     const exact = await resolveKoreanCode(query);
@@ -1701,7 +1698,7 @@ async function getIntraday(symbol, interval = "1m", mode = "KRX") {
   }
 }
 
-async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
+async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", lineBreak = false) {
   const normalized = symbol.trim().toUpperCase();
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
   let kisMeta = {
@@ -1720,7 +1717,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     let naverMinuteRows = [];
     const preferNaverNxt = mode === "NTX" && isKoreanSymbol(normalized);
     const includePrePost = useNtxQuote && isIntradayInterval(interval);
-    const range = includePrePost ? "1d" : config.range;
+    const range = includePrePost ? "1d" : lineBreak && interval === "1d" ? "10y" : lineBreak && ["1wk", "1mo"].includes(interval) ? "max" : config.range;
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=${includePrePost ? "true" : "false"}`;
 
     let yahooPayload = null;
@@ -1807,16 +1804,18 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
     let payload = null;
     if (yahooPayload) {
       payload = yahooPayload;
-    } else if (kisIntradayRows.length) {
+    } else if ([kisIntradayRows, kisNtxIntradayRows, kisIndexIntradayRows, kisIndexTimepriceRows, naverMinuteRows].some(rows => rows.length)) {
+      const availableRows = [kisIntradayRows, kisNtxIntradayRows, kisIndexIntradayRows, kisIndexTimepriceRows, naverMinuteRows]
+        .reduce((longest, rows) => rows.length > longest.length ? rows : longest, []);
       payload = {
         symbol: normalized,
-        price: liveQuote?.price || kisIntradayRows.at(-1).close,
-        previousClose: liveQuote?.previousClose || kisIntradayRows[0].open,
+        price: liveQuote?.price || availableRows.at(-1).close,
+        previousClose: liveQuote?.previousClose || availableRows[0].open,
         change: liveQuote?.change || 0,
         changePercent: liveQuote?.changePercent || 0,
-        asOf: kisIntradayRows.at(-1).time,
-        marketTime: kisIntradayRows.at(-1).time,
-        series: kisIntradayRows
+        asOf: availableRows.at(-1).time,
+        marketTime: availableRows.at(-1).time,
+        series: availableRows
       };
     } else {
       throw yahooError || new Error("No chart data");
@@ -1939,6 +1938,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX") {
       series: trimmed
     };
   } catch (error) {
+    if (lineBreak) throw Object.assign(new Error("삼선전환도를 계산할 실제 시세 데이터를 받지 못했습니다."), { status: 503 });
     if (kisMeta.attempted && !kisMeta.ok && !kisMeta.error) kisMeta.error = kisErrorMessage(error);
     const series = fallbackCandles(normalized, limit, config.seconds);
     const previousClose = series.length > 1 ? series.at(-2).close : series[0].open;
@@ -2130,8 +2130,9 @@ const server = createServer(async (req, res) => {
   if (pathname === "/api/chart") {
     const symbol = (url.searchParams.get("symbol") || "NVDA.US").trim().toUpperCase();
     const interval = url.searchParams.get("interval") || "1d";
-    const limit = Math.min(MAX_QUERY_LIMIT, Math.max(20, Number(url.searchParams.get("limit") || 120)));
-    const payload = await getChart(symbol, interval, limit, url.searchParams.get("mode") || "KRX");
+    const lineBreak = url.searchParams.get("chartType") === "line-break";
+    const limit = Math.min(lineBreak ? MAX_LINE_BREAK_HISTORY : MAX_QUERY_LIMIT, Math.max(20, Number(url.searchParams.get("limit") || 120)));
+    const payload = await getChart(symbol, interval, limit, url.searchParams.get("mode") || "KRX", lineBreak);
     await sendJson(res, {
       ok: true,
       symbol,
