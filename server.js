@@ -11,6 +11,7 @@ import { createAuth, readJsonBody } from "./lib/auth.js";
 import { createKisClient } from "./lib/kis-client.js";
 import { createKisFutures } from "./lib/kis-futures.js";
 import { createKisDomesticHistory } from "./lib/kis-domestic-history.js";
+import { createUsPriceChange, usChangeFromBase } from "./lib/us-price-change.js";
 
 // Match stock5-8: exported variables win, then .env.local, then .env.
 dotenv.config({ path: '.env.local', quiet: true });
@@ -39,6 +40,7 @@ const kisFutures = createKisFutures({ ...futuresClient, fetcher: fetchWithTimeou
 const MAX_QUERY_LIMIT = 700;
 const MAX_LINE_BREAK_HISTORY = 10000;
 const naverMinuteCache = new Map();
+const normalizeUsPriceChange = createUsPriceChange({ fetcher: fetchWithTimeout });
 let koreanMasterCache = {
   loadedAt: 0,
   items: []
@@ -472,26 +474,16 @@ function parseKisIndexQuote(symbol, json) {
 
 function parseKisOverseasQuote(symbol, json) {
   const output = json.output || {};
-  const price = numericField(output.last, output.base);
-  let previousClose = numericField(output.prev, output.pvol);
-  const change = numericField(output.diff, Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : NaN);
-  const changePercent = numericField(output.rate);
-  if ((!Number.isFinite(previousClose) || previousClose <= 0) && Number.isFinite(price) && Number.isFinite(change)) {
-    previousClose = price - change;
-  }
-  return {
+  // KIS base = previous regular close; pvol = previous trading volume.
+  return usChangeFromBase({
     symbol,
     name: SYMBOL_NAMES[symbol] || symbol,
-    price,
-    previousClose,
-    change,
-    changePercent,
-    changeRate: changePercent,
+    price: numericField(output.last),
     asOf: Math.floor(Date.now() / 1000),
     marketTime: Math.floor(Date.now() / 1000),
     marketStatus: marketStatus(symbol),
     source: "kis"
-  };
+  }, numericField(output.base));
 }
 
 function koreanDateTimeToUnix(dateValue, timeValue) {
@@ -1178,9 +1170,9 @@ function parseYahooIntraday(symbol, json) {
     }
   }
 
-  const previousClose = Number(
-    meta.chartPreviousClose ?? meta.previousClose ?? meta.regularMarketPreviousClose
-  );
+  const previousClose = isUsSymbol(symbol)
+    ? numericField(meta.regularMarketPreviousClose, meta.previousClose)
+    : numericField(meta.chartPreviousClose, meta.previousClose, meta.regularMarketPreviousClose);
   const price = Number(meta.regularMarketPrice ?? rows.at(-1)?.close);
   const change = Number.isFinite(previousClose) ? price - previousClose : price - rows.at(-1)?.open;
   const changePercent = Number.isFinite(previousClose) && previousClose !== 0
@@ -1222,13 +1214,13 @@ function parseYahooChart(symbol, json) {
     });
   }
 
-  const previousClose = Number(
-    meta.chartPreviousClose ?? meta.previousClose ?? meta.regularMarketPreviousClose
-  );
+  const previousClose = isUsSymbol(symbol)
+    ? numericField(meta.regularMarketPreviousClose, meta.previousClose)
+    : numericField(meta.chartPreviousClose, meta.previousClose, meta.regularMarketPreviousClose);
   const last = rows.at(-1);
   const prev = rows.at(-2);
   const price = Number(meta.regularMarketPrice ?? last?.close);
-  const compareClose = Number.isFinite(previousClose) ? previousClose : prev?.close;
+  const compareClose = isUsSymbol(symbol) ? previousClose : Number.isFinite(previousClose) ? previousClose : prev?.close;
   const change = Number.isFinite(compareClose) ? price - compareClose : price - last?.open;
   const changePercent = Number.isFinite(compareClose) && compareClose !== 0 ? (change / compareClose) * 100 : 0;
 
@@ -1712,7 +1704,13 @@ async function getIntraday(symbol, interval = "1m", mode = "KRX") {
     payload.series = normalizeKoreanIntradayRows(normalized, payload.series);
     payload.series = applyKoreanClosingPrint(normalized, payload.series, payload);
     if (!payload.series.length) throw new Error("No intraday data");
-    return payload;
+    if (includePrePost && isUsSymbol(normalized)) {
+      const last = payload.series.at(-1);
+      payload.price = last.close;
+      payload.marketTime = last.time;
+      payload.asOf = last.time;
+    }
+    return normalizeUsPriceChange(payload);
   } catch {
     if (isFuturesSymbol(normalized)) throw Object.assign(new Error("선물 시세 데이터를 받지 못했습니다."), { status: 503 });
     const series = fallbackCandles(normalized, 96, 60);
@@ -1965,7 +1963,10 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
     const prevClose = trimmed.at(-2)?.close;
     let price = payload.price;
     let previousClose = payload.previousClose;
-    if (interval === "1d") {
+    if (isUsSymbol(normalized)) {
+      // Changing the chart period never changes a US stock's daily quote base.
+      price = payload.price;
+    } else if (interval === "1d") {
       previousClose = prevClose ?? lastClose;
     } else if (interval === "1wk" || interval === "1mo") {
       price = lastClose;
@@ -1976,7 +1977,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       previousClose = liveQuote.previousClose;
     }
     const change = liveQuote?.change ?? (Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : 0);
-    return {
+    return normalizeUsPriceChange({
       ...payload,
       price,
       previousClose,
@@ -1986,7 +1987,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       source: payload.source || (kisMeta.attempted && !kisMeta.ok ? "fallback-after-kis-error" : "yahoo-or-sample"),
       kis: kisMeta,
       series: trimmed
-    };
+    });
   } catch (error) {
     if (isFuturesSymbol(normalized)) throw Object.assign(new Error("선물 시세 데이터를 받지 못했습니다."), { status: 503 });
     if (lineBreak) throw Object.assign(new Error("삼선전환도를 계산할 실제 시세 데이터를 받지 못했습니다."), { status: 503 });
@@ -2067,6 +2068,7 @@ async function getQuote(symbol, mode = "KRX") {
     change: intraday.change,
     changePercent: intraday.changePercent,
     changeRate: intraday.changePercent,
+    ...(isUsSymbol(normalized) ? { changeBasis: intraday.changeBasis, previousCloseDate: intraday.previousCloseDate } : {}),
     asOf: intraday.asOf,
     marketStatus: marketStatus(normalized),
     source: kisMeta.attempted && !kisMeta.ok ? "fallback-after-kis-error" : "yahoo-or-sample",

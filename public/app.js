@@ -184,6 +184,7 @@ function formatNumber(value, decimals = 2) {
 }
 
 function formatChange(value, decimals = 2) {
+  if (value == null) return "--";
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
   return `${number > 0 ? "+" : ""}${number.toFixed(decimals)}%`;
@@ -701,7 +702,7 @@ function updateSeriesVisibility(state) {
 function renderLegend(state, payload) {
   const rows = visibleRows(state);
   const last = rows.at(-1);
-  const changePct = Number(payload.changePercent ?? 0);
+  const changePct = payload.changePercent == null ? NaN : Number(payload.changePercent);
   const direction = changePct >= 0 ? "up" : "down";
   const decimals = priceDecimalsForSymbol(payload.symbol || state.item.symbol);
   const card = state.card;
@@ -719,6 +720,8 @@ function renderLegend(state, payload) {
       payload.marketTime || payload.asOf ? `시세 시각 ${new Date((payload.marketTime || payload.asOf) * 1000).toLocaleString('ko-KR')}` : '', payload.streamError || ''].filter(Boolean).join('\n') : '';
   card.querySelector(".last-change").textContent = formatChange(changePct, 2);
   card.querySelector(".last-change").className = `last-change ${direction}`;
+  card.querySelector(".last-change").title = payload.changeBasis === 'previous-regular-close' && Number.isFinite(payload.previousClose)
+    ? `직전 거래일 정규장 종가${payload.previousCloseDate ? ` (${payload.previousCloseDate})` : ''}: ${formatNumber(payload.previousClose, decimals)} · 등락폭: ${payload.change > 0 ? '+' : ''}${formatNumber(payload.change, decimals)}` : '';
 }
 
 function applyPayload(state, payload, initial = false) {
