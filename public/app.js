@@ -6,7 +6,7 @@ import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
 import { isFuturesSymbol } from "./instrument-catalog.js";
-import { buildCursorGroups, visibleLogicalRange } from "./chart-alignment.js";
+import { buildCursorGroups, cursorTimeForChart, visibleLogicalRange } from "./chart-alignment.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -87,13 +87,15 @@ let hoveredChart = null;
 function syncVerticalCursor() {
   for (const state of chartState.values()) {
     const sameGroup = !showLineBreak && hoveredChart && state !== hoveredChart.state && state.alignment && state.alignment === hoveredChart.state.alignment;
-    const x = sameGroup ? state.instance.chart.timeScale().timeToCoordinate(hoveredChart.time) : null;
+    const targetTime = sameGroup ? cursorTimeForChart(state.rows, state.interval, hoveredChart.time) : null;
+    const x = targetTime != null ? state.instance.chart.timeScale().timeToCoordinate(targetTime) : null;
     const visible = Number.isFinite(x) && x >= 0 && x <= state.instance.chart.timeScale().width();
     state.syncCursor.hidden = !visible;
     if (visible) {
       state.syncCursor.style.left = `${x}px`;
       state.syncCursor.style.bottom = `${state.instance.chart.timeScale().height()}px`;
-      state.syncCursor.dataset.time = String(hoveredChart.time);
+      state.syncCursor.dataset.time = String(targetTime);
+      state.syncCursor.dataset.sourceTime = String(hoveredChart.time);
     }
   }
 }
@@ -114,7 +116,21 @@ function scheduleTimeAlignment() {
 
 function handleVisibleRangeChange(state) {
   drawMacdBackground(state);
+  renderPointerCursor(state);
   syncVerticalCursor();
+}
+
+function renderPointerCursor(state) {
+  if (!state.pointerInside || !state.pointerPoint || !state.rows.length) return;
+  const point = state.pointerPoint;
+  const scale = state.instance.chart.timeScale();
+  const time = scale.coordinateToTime(point.x);
+  if (time == null || point.x < 0 || point.x > scale.width() || point.y < 0) return;
+  showTooltip(state, { time, point });
+  hoveredChart = { state, time };
+  syncVerticalCursor();
+  const price = state.instance.candleSeries.coordinateToPrice(point.y);
+  if (Number.isFinite(price)) state.instance.chart.setCrosshairPosition(price, time, state.instance.candleSeries);
 }
 
 function syncPriceScaleWidths() {
@@ -494,7 +510,7 @@ function tooltipValues(state, row) {
 
 function showTooltip(state, param) {
   const tooltip = state.card.querySelector(".price-tooltip");
-  if (!param?.time || !param.point || param.point.x < 0 || param.point.y < 0) {
+  if (!param?.time || !param.point || param.point.x < 0 || param.point.y < 0 || param.point.x > state.instance.chart.timeScale().width()) {
     tooltip.style.display = "none";
     return;
   }
@@ -508,20 +524,18 @@ function showTooltip(state, param) {
   const decimals = priceDecimalsForSymbol(state.item.symbol);
   const { open, close, changePct } = tooltipValues(state, row);
   const direction = !Number.isFinite(changePct) || changePct >= 0 ? "up" : "down";
+  const [date, time] = formatTooltipTime(state.interval, row.time).split(' ');
   tooltip.innerHTML = `
-    <div class="tooltip-date">${formatTooltipTime(state.interval, row.time)}</div>
+    <div class="tooltip-date"><span>${date}</span>${time ? `<span>${time}</span>` : ''}</div>
     <div class="tooltip-row"><span>시가</span><strong>${formatNumber(open, decimals)}</strong></div>
     <div class="tooltip-row"><span>종가</span><strong>${formatNumber(close, decimals)}</strong></div>
     <div class="tooltip-row ${direction}"><span>등락률</span><strong>${formatChange(changePct, 2)}</strong></div>
   `;
 
-  const cardRect = state.card.getBoundingClientRect();
-  const tooltipWidth = 142;
-  const tooltipHeight = 86;
-  const left = Math.min(Math.max(8, param.point.x + 14), cardRect.width - tooltipWidth - 8);
-  const top = Math.min(Math.max(8, param.point.y + 14), cardRect.height - tooltipHeight - 8);
-  tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${top}px`;
+  const controls = state.card.querySelector('.card-controls');
+  tooltip.style.left = `${state.instance.chart.timeScale().width() + 2}px`;
+  tooltip.style.width = `${state.instance.chart.priceScale('right').width() - 4}px`;
+  tooltip.style.top = `${controls.offsetTop + controls.offsetHeight + 3}px`;
   tooltip.style.display = "block";
 }
 
@@ -791,6 +805,7 @@ function applyPayload(state, payload, initial = false) {
   syncPriceScaleWidths();
   scheduleTimeAlignment();
   state.trendEditor?.schedule();
+  renderPointerCursor(state);
 }
 
 async function fetchChart(state) {
@@ -952,13 +967,18 @@ async function createCard(item, index) {
     syncPriceScaleWidths();
     syncVerticalCursor();
   });
-  state.instance.chart.subscribeCrosshairMove((param) => {
-    showTooltip(state, param);
-    hoveredChart = param.time && param.point && param.point.x >= 0 && param.point.x <= state.instance.chart.timeScale().width()
-      ? { state, time: param.time } : null;
-    syncVerticalCursor();
-  });
+  const pointerMove = event => {
+    const rect = stage.getBoundingClientRect();
+    state.pointerInside = true;
+    state.pointerPoint = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    renderPointerCursor(state);
+  };
+  stage.addEventListener('pointerenter', pointerMove);
+  stage.addEventListener('pointermove', pointerMove);
   stage.addEventListener('pointerleave', () => {
+    state.pointerInside = false;
+    state.card.querySelector('.price-tooltip').style.display = 'none';
+    state.instance.chart.clearCrosshairPosition();
     if (hoveredChart?.state === state) { hoveredChart = null; syncVerticalCursor(); }
   });
 

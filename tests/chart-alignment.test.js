@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCursorGroups, visibleLogicalRange } from '../public/chart-alignment.js';
+import { buildCursorGroups, cursorTimeForChart, visibleLogicalRange } from '../public/chart-alignment.js';
 
 const chart = (slotIndex, times, extra = {}) => ({ slotIndex, interval: '1m', limit: 400, rows: times.map(time => ({ time, open: 100, high: 101, low: 99, close: 100 })), ...extra });
 
@@ -35,7 +35,7 @@ test('changing the bottom-right bar count or timeframe cannot change the top-rig
   const original = visibleLogicalRange(top.rows.length, top.limit);
   assert.equal(buildCursorGroups([top, bottom]).length, 1);
   bottom.limit = 80;
-  assert.equal(buildCursorGroups([top, bottom]).length, 0);
+  assert.equal(buildCursorGroups([top, bottom]).length, 1);
   assert.deepEqual(visibleLogicalRange(top.rows.length, top.limit), original);
   assert.equal(bottom.rows.length - visibleLogicalRange(bottom.rows.length, bottom.limit).from, 80);
   bottom.limit = 400; bottom.interval = '1d';
@@ -43,4 +43,28 @@ test('changing the bottom-right bar count or timeframe cannot change the top-rig
   assert.deepEqual(visibleLogicalRange(top.rows.length, top.limit), original);
   assert.deepEqual(visibleLogicalRange(30, 400), { from: 0, to: 31 });
   assert.equal(visibleLogicalRange(0, 400), null);
+});
+
+test('one-minute 14:30 and 14:31 cursors map to the target five-minute 14:30 candle without changing its view', () => {
+  const time = Date.parse('2026-10-20T05:30:00Z') / 1000; // 14:30 KST
+  const source = chart(0, [time, time + 60, time + 120]);
+  const target = chart(1, [time - 300, time, time + 300], { interval: '5m', limit: 120 });
+  const view = visibleLogicalRange(target.rows.length, target.limit);
+  assert.equal(buildCursorGroups([source, target]).length, 1);
+  assert.equal(cursorTimeForChart(target.rows, '5m', time), time);
+  assert.equal(cursorTimeForChart(target.rows, '5m', time + 60), time);
+  assert.equal(cursorTimeForChart(target.rows, '5m', time + 299), time);
+  assert.equal(cursorTimeForChart(target.rows, '5m', time + 300), time + 300);
+  assert.equal(cursorTimeForChart(source.rows, '1m', time), time);
+  assert.deepEqual(visibleLogicalRange(target.rows.length, target.limit), view);
+});
+
+test('cursor matching does not bridge a session gap or point at a nonexistent candle', () => {
+  const rows = [{ time: 0 }, { time: 300 }, { time: 86400 }];
+  assert.equal(cursorTimeForChart(rows, '5m', -1), null);
+  assert.equal(cursorTimeForChart(rows, '5m', 600), null);
+  assert.equal(cursorTimeForChart(rows, '5m', 86400 + 300), null);
+  assert.equal(cursorTimeForChart(rows, '1d', 301), null);
+  assert.equal(cursorTimeForChart(rows, '1d', 86400), 86400);
+  assert.equal(cursorTimeForChart([], '5m', 300), null);
 });
