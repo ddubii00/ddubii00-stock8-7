@@ -6,7 +6,7 @@ import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
 import { isFuturesSymbol } from "./instrument-catalog.js";
-import { buildTimeAlignments } from "./chart-alignment.js";
+import { buildCursorGroups, visibleLogicalRange } from "./chart-alignment.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -57,7 +57,6 @@ const PRICE_SCALE_WIDTH = 82;
 const FETCH_LIMIT = 700;
 const LINE_BREAK_FETCH_LIMIT = 10000;
 const candleHistories = new Map();
-const NTX_VISIBLE_LIMIT = 620;
 const INTERVAL_SECONDS = {
   "1m": 60,
   "3m": 180,
@@ -83,7 +82,6 @@ let chartFitFrame = 0;
 let priceScaleFitFrame = 0;
 let priceScaleWidth = PRICE_SCALE_WIDTH;
 let alignmentFrame = 0;
-let syncingRange = false;
 let hoveredChart = null;
 
 function syncVerticalCursor() {
@@ -106,49 +104,15 @@ function scheduleTimeAlignment() {
     alignmentFrame = 0;
     const states = [...chartState.values()].filter(state => !state.disposed);
     const ready = states.filter(state => state.rows.length && state.lastPayloadKey === chartRequestKey(state));
-    // Each line-break chart has its own irregular conversion dates and bar count.
-    const groups = showLineBreak ? [] : buildTimeAlignments(ready.map(state => ({ slotIndex: state.slotIndex, interval: state.interval, limit: state.limit,
-      rows: state.rows, visibleLimit: visibleRows(state).length, state })), LAYOUTS[layoutIndex]);
-    const previous = new Map(states.map(state => [state, state.alignment]));
+    // Share only the cursor timestamp. Every chart owns its data and viewport.
+    const groups = showLineBreak ? [] : buildCursorGroups(ready, LAYOUTS[layoutIndex]);
     for (const state of states) state.alignment = null;
-    syncingRange = true;
-    try {
-      for (const group of groups) {
-        const peers = group.members.map(member => member.state);
-        const unchanged = peers.every(state => previous.get(state)?.signature === group.signature);
-        group.states = peers;
-        for (const state of peers) {
-          state.alignment = group;
-          state.timeline = group.timeline;
-          if (!unchanged) {
-            state.instance.timelineSeries.setData(group.timeline);
-            state.instance.chart.timeScale().setVisibleLogicalRange(group.range);
-          }
-        }
-      }
-      for (const state of states) {
-        if (state.alignment) continue;
-        state.timeline = state.rows;
-        if (previous.get(state)) {
-          state.instance.timelineSeries.setData([]);
-          keepLatestVisible(state);
-        }
-      }
-    } finally { syncingRange = false; }
-    for (const state of ready) { drawMacdBackground(state); state.trendEditor?.schedule(); }
+    for (const group of groups) for (const state of group.members) state.alignment = group;
     syncVerticalCursor();
   });
 }
 
-function syncVisibleRange(state, range) {
-  if (!syncingRange && range && state.alignment) {
-    syncingRange = true;
-    try {
-      for (const peer of state.alignment.states) {
-        if (peer !== state && !peer.disposed) peer.instance.chart.timeScale().setVisibleLogicalRange(range);
-      }
-    } finally { syncingRange = false; }
-  }
+function handleVisibleRangeChange(state) {
   drawMacdBackground(state);
   syncVerticalCursor();
 }
@@ -562,9 +526,7 @@ function showTooltip(state, param) {
 }
 
 function visibleRows(state) {
-  const isKoreanNtxIntraday = sessionMode === "NTX" && isIntraday(state.interval) && isKoreanSymbol(state.item.symbol);
-  const limit = isKoreanNtxIntraday ? Math.min(MAX_LIMIT, Math.max(state.limit, NTX_VISIBLE_LIMIT)) : state.limit;
-  return state.rows?.slice(-limit) || [];
+  return state.rows?.slice(-state.limit) || [];
 }
 
 function localDateKeyForSymbol(symbol, timestamp) {
@@ -598,19 +560,8 @@ function shouldIgnoreIntradayPayload(state, rows, initial) {
 }
 
 function keepLatestVisible(state) {
-  if (state.alignment) {
-    state.instance.chart.timeScale().setVisibleLogicalRange(state.alignment.range);
-    return;
-  }
-  const rows = visibleRows(state);
-  if (!rows.length) return;
-  const total = state.rows.length;
-  const visible = rows.length;
-  const to = Math.max(0, total - 1 + CHART_RIGHT_OFFSET);
-  state.instance.chart.timeScale().setVisibleLogicalRange({
-    from: Math.max(0, total - visible),
-    to
-  });
+  const range = visibleLogicalRange(state.rows.length, state.limit, CHART_RIGHT_OFFSET);
+  if (range) state.instance.chart.timeScale().setVisibleLogicalRange(range);
 }
 
 function isViewAtLatest(state) {
@@ -757,7 +708,8 @@ function applyPayload(state, payload, initial = false) {
   let sourceRows = payload.series || [];
   if (!sourceRows.length) throw new Error("시세 데이터가 없습니다.");
   if (showLineBreak && /^fallback/.test(payload.source || "")) throw new Error("실제 시세 데이터를 받지 못했습니다.");
-  const previousLastTime = state.rows?.at(-1)?.time;
+  const previousRows = state.rows || [];
+  const previousLastTime = previousRows.at(-1)?.time;
   if (shouldIgnoreIntradayPayload(state, sourceRows, initial)) return;
   state.latestSourceRows = sourceRows;
   if (showLineBreak) {
@@ -773,12 +725,14 @@ function applyPayload(state, payload, initial = false) {
 
   state.sourceRows = sourceRows;
   state.rows = rows;
+  state.timeline = rows;
   state.macd = showLineBreak ? [] : calcMacd(rows);
   state.previousClose = Number(payload.previousClose);
   syncIndicatorMode(state);
 
   // isTickUpdate: same last candle time = only price updated, not a new bar
-  const isTickUpdate = !showLineBreak && !initial && isIntraday(state.interval) && previousLastTime === latest?.time;
+  const isTickUpdate = !showLineBreak && !initial && isIntraday(state.interval) && previousLastTime === latest?.time
+    && previousRows.length === rows.length && rows.every((row, index) => row.time === previousRows[index].time);
 
   // Only apply chart/series options on full reloads to avoid resetting pan/zoom state
   if (!isTickUpdate) {
@@ -803,6 +757,8 @@ function applyPayload(state, payload, initial = false) {
   // A new symbol/timeframe starts fitted; ordinary quote refreshes preserve
   // the manually dragged price range.
   if (initial) state.instance.chart.priceScale("right").applyOptions({ autoScale: true });
+
+  if (!isTickUpdate) state.instance.timelineSeries.setData(rows.map(({ time }) => ({ time })));
 
   if (isTickUpdate && state.visible.candle) {
     state.instance.candleSeries.update(latest);
@@ -990,10 +946,11 @@ async function createCard(item, index) {
   state.syncCursor.hidden = true;
   state.syncCursor.setAttribute('aria-hidden', 'true');
   card.append(state.syncCursor);
-  state.instance.chart.timeScale().subscribeVisibleLogicalRangeChange(range => syncVisibleRange(state, range));
+  state.instance.chart.timeScale().subscribeVisibleLogicalRangeChange(() => handleVisibleRangeChange(state));
   state.instance.chart.timeScale().subscribeSizeChange(() => {
     drawMacdBackground(state);
     syncPriceScaleWidths();
+    syncVerticalCursor();
   });
   state.instance.chart.subscribeCrosshairMove((param) => {
     showTooltip(state, param);

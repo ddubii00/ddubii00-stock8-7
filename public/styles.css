@@ -84,29 +84,36 @@ body {
 .card-controls {
   position: relative;
   z-index: 6;
-  margin: 5px 74px 0 8px;
+  margin: 5px 8px 0;
   z-index: 9;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-start;
-  gap: 3px 6px;
+  gap: clamp(2px, 0.6cqw, 6px);
+  white-space: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
   pointer-events: auto;
 }
 
 .timeframe-buttons {
-  display: contents;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: clamp(1px, 0.4cqw, 4px);
 }
 
 .tf-button {
+  flex: 0 0 auto;
   height: 20px;
-  padding: 0 5px;
+  padding: 0 clamp(1px, 0.5cqw, 5px);
   border: 1px solid transparent;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.86);
   color: var(--muted);
   font-family: inherit;
-  font-size: 11px;
+  font-size: clamp(8px, 2.1cqw, 11px);
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
@@ -129,7 +136,7 @@ body {
   align-items: center;
   gap: 5px;
   flex-shrink: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   max-width: 100%;
   color: var(--muted);
   font-size: 11px;
@@ -138,7 +145,8 @@ body {
 }
 
 .period-control input {
-  width: 54px;
+  appearance: textfield;
+  width: clamp(40px, 9cqw, 54px);
   height: 20px;
   padding: 2px 6px;
   border: 1px solid var(--border);
@@ -150,6 +158,9 @@ body {
   font-weight: 700;
   text-align: center;
 }
+
+.period-control input::-webkit-inner-spin-button,
+.period-control input::-webkit-outer-spin-button { appearance: none; margin: 0; }
 
 .market-summary {
   display: flex;
@@ -388,7 +399,7 @@ body {
 
 .symbol-block {
   display: flex;
-  flex: 0 1 90px;
+  flex: 0 0 clamp(44px, 15cqw, 90px);
   align-items: center;
   min-width: 0;
   max-width: 100%;
@@ -640,10 +651,11 @@ body {
 .chart-card:focus { outline: none; }
 .load-retry { margin: auto; padding: 18px; border: 1px solid var(--border); border-radius: 6px; background: white; cursor: pointer; }
 /* Layout numbers mean columns × rows; every chart fits the viewport. */
-.chart-grid[data-layout="2x2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+.chart-grid[data-layout="2x2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); grid-auto-flow: column; }
 .chart-grid[data-layout="1x3"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(3, minmax(0, 1fr)); }
 .chart-grid[data-layout="3x1"] { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); }
 .chart-grid[data-layout="1x1"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.chart-grid[data-layout="2x1"] { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); }
 .chart-grid[data-layout] > .chart-card { height: 100%; }
 
 @media (max-width: 400px) {
@@ -659,7 +671,7 @@ body {
 
 @container (max-width: 360px) {
   .card-controls, .chart-overlay { margin-right: 10px; }
-  .tf-button { height: 18px; padding: 0 3px; font-size: 10px; }
+  .tf-button { height: 18px; padding: 0 1px; font-size: clamp(8px, 2.1cqw, 10px); }
   .symbol-title { height: 22px; font-size: 13px; }
   .last-price { font-size: 14px; }
 }
