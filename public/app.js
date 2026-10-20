@@ -568,7 +568,9 @@ function shouldIgnoreIntradayPayload(state, rows, initial) {
   const priorNextTime = Number(priorNext?.time);
   const sameTailDate = Number.isFinite(priorNextTime)
     && localDateKeyForSymbol(state.item.symbol, priorNextTime) === localDateKeyForSymbol(state.item.symbol, nextTime);
-  if (sameTailDate && nextTime - priorNextTime > seconds * 2.5) return true;
+  // KRX's 15:30 auction close and 16:00 after-market opening are separated
+  // by a real session break; sparse/first after-market prints remain valid.
+  if (!isKoreanSymbol(state.item.symbol) && sameTailDate && nextTime - priorNextTime > seconds * 2.5) return true;
   if (rows.length < Math.max(30, previous.length * 0.75)) return true;
   return false;
 }

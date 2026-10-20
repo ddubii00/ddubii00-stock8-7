@@ -10,6 +10,7 @@ import { createDashboardStore } from "./lib/dashboard-store.js";
 import { createAuth, readJsonBody } from "./lib/auth.js";
 import { createKisClient } from "./lib/kis-client.js";
 import { createKisFutures } from "./lib/kis-futures.js";
+import { createKisDomesticHistory } from "./lib/kis-domestic-history.js";
 
 // Match stock5-8: exported variables win, then .env.local, then .env.
 dotenv.config({ path: '.env.local', quiet: true });
@@ -28,6 +29,7 @@ const KIS_FUTURES_APP_KEY = hasFuturesCredentials ? process.env.KIS_FUTURES_APP_
 const KIS_FUTURES_APP_SECRET = hasFuturesCredentials ? process.env.KIS_FUTURES_APP_SECRET || "" : KIS_APP_SECRET;
 const KIS_FUTURES_ENABLED = Boolean(KIS_FUTURES_APP_KEY && KIS_FUTURES_APP_SECRET);
 const mainKisClient = createKisClient({ appKey: KIS_APP_KEY, appSecret: KIS_APP_SECRET, baseUrl: KIS_BASE_URL, fetcher: fetchWithTimeout });
+const kisDomesticHistory = createKisDomesticHistory({ request: mainKisClient.request });
 const futuresClient = KIS_FUTURES_APP_KEY === KIS_APP_KEY && KIS_FUTURES_APP_SECRET === KIS_APP_SECRET ? mainKisClient
   : createKisClient({ appKey: KIS_FUTURES_APP_KEY, appSecret: KIS_FUTURES_APP_SECRET, baseUrl: KIS_BASE_URL, fetcher: fetchWithTimeout });
 const kisFutures = createKisFutures({ ...futuresClient, fetcher: fetchWithTimeout,
@@ -36,6 +38,7 @@ const kisFutures = createKisFutures({ ...futuresClient, fetcher: fetchWithTimeou
   timeZone: process.env.KIS_FUTURES_TIME_ZONE || "Asia/Seoul" });
 const MAX_QUERY_LIMIT = 700;
 const MAX_LINE_BREAK_HISTORY = 10000;
+const naverMinuteCache = new Map();
 let koreanMasterCache = {
   loadedAt: 0,
   items: []
@@ -360,6 +363,17 @@ function forexMarketStatus(now = new Date()) {
   return open ? "장중" : "장종료";
 }
 
+function koreanStockStatus(timestamp, now = new Date(), trading = true) {
+  if (!trading || !Number.isFinite(timestamp)) return "종가";
+  const current = Math.floor(now.getTime() / 1000);
+  const day = new Date((current + 9 * 3600) * 1000).getUTCDay();
+  if ([0, 6].includes(day) || koreanDateKeyForTimestamp(timestamp) !== koreanDateKeyForTimestamp(current)) return "종가";
+  const minute = koreanMinuteOfDay(current);
+  if (minute >= 16 * 60 && minute < 20 * 60) return "장후";
+  if (minute >= 15 * 60 + 20 && minute < 15 * 60 + 30) return "동시호가";
+  return minute >= 9 * 60 && minute < 15 * 60 + 20 ? "장중" : "종가";
+}
+
 function marketStatus(symbol, now = new Date()) {
   if (isFuturesSymbol(symbol)) return "선물";
   if (isForexSymbol(symbol)) return forexMarketStatus(now);
@@ -493,7 +507,7 @@ function koreanDateTimeToUnix(dateValue, timeValue) {
   return Math.floor(Date.UTC(year, month - 1, day, hour - 9, minute, second) / 1000);
 }
 
-function kisIntradayEndTime(now = new Date()) {
+function kisIntradayEndTime(now = new Date(), includeAfter = false) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Seoul",
     hour: "2-digit",
@@ -502,6 +516,7 @@ function kisIntradayEndTime(now = new Date()) {
     hourCycle: "h23"
   }).formatToParts(now).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
   const minute = Number(parts.hour) * 60 + Number(parts.minute);
+  if (includeAfter && minute >= 16 * 60) return minute >= 20 * 60 ? "200000" : `${parts.hour}${parts.minute}${parts.second}`;
   if (minute >= 15 * 60 + 32) return "153200";
   if (minute >= 15 * 60 + 31) return "153100";
   if (minute < 9 * 60) return "090000";
@@ -631,14 +646,27 @@ function kisIndexRawTimeValue(item) {
   ]) || pickMatchingRawValue(item, /(time|hour|tm|cntg)/i, /^\d{4,6}$/);
 }
 
-async function fetchKisIntradayRows(symbol, yahooLastTime = 0) {
+async function fetchKisIntradayRows(symbol, count = 700) {
+  const normalized = symbol.trim().toUpperCase();
+  if (!KIS_ENABLED || !isKoreanSymbol(normalized)) return [];
+  try {
+    const raw = await kisDomesticHistory(normalized.split(".")[0], count);
+    const rows = parseKisIntradayRows(normalized, raw);
+    if (rows.length) return rows;
+  } catch {
+    // Date-based history is real-account only; preserve today when unavailable.
+  }
+  return fetchKisTodayIntradayRows(normalized);
+}
+
+async function fetchKisTodayIntradayRows(symbol, yahooLastTime = 0) {
   const normalized = symbol.trim().toUpperCase();
   if (!KIS_ENABLED || !isKoreanSymbol(normalized)) return [];
   const code = normalized.split(".")[0];
 
   const allRawRows = [];
-  let currentEndTime = kisIntradayEndTime();
-  const maxPages = 20;
+  let currentEndTime = kisIntradayEndTime(new Date(), true);
+  const maxPages = 40;
 
   for (let page = 0; page < maxPages; page++) {
     const json = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice", "FHKST03010200", {
@@ -855,7 +883,7 @@ function parseNaverRealtimeQuote(symbol, item, mode = "KRX") {
     marketTime: asOf,
     marketStatus: isKoreanIndex(normalized)
       ? (statusOpen ? "장중" : "장종료")
-      : (statusOpen ? "장중" : "종가"),
+      : koreanStockStatus(asOf, new Date(), statusOpen),
     source: useNxt ? "naver-nxt-realtime" : "naver-realtime"
   };
   if (useNxt) {
@@ -913,7 +941,8 @@ function parseNaverMinuteRows(symbol, text) {
 
   const sorted = rawRows.sort((a, b) => a.time - b.time);
   return sorted.map((row, index) => {
-    const previous = sorted[index - 1];
+    const candidate = sorted[index - 1];
+    const previous = candidate && koreanDateKeyForTimestamp(candidate.time) === koreanDateKeyForTimestamp(row.time) ? candidate : null;
     const open = Number.isFinite(row.open) && row.open > 0 ? row.open : (previous?.close ?? row.close);
     const high = Number.isFinite(row.high) && row.high > 0 ? row.high : Math.max(open, row.close);
     const low = Number.isFinite(row.low) && row.low > 0 ? row.low : Math.min(open, row.close);
@@ -932,15 +961,28 @@ function parseNaverMinuteRows(symbol, text) {
   });
 }
 
-async function fetchNaverMinuteRows(symbol, anchorTimestamp) {
+async function fetchNaverMinuteRows(symbol, anchorTimestamp, lookbackDays = 7) {
   const normalized = symbol.trim().toUpperCase();
   if (!isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) return [];
   const code = isKoreanIndex(normalized) ? naverIndexCode(normalized) : normalized.split(".")[0];
   const dateKey = koreanDateKeyForTimestamp(anchorTimestamp || Math.floor(Date.now() / 1000));
-  const url = `https://api.finance.naver.com/siseJson.naver?symbol=${encodeURIComponent(code)}&requestType=1&startTime=${dateKey}0900&endTime=${dateKey}1530&timeframe=minute`;
-  const response = await fetchWithTimeout(url, 3500);
-  if (!response.ok) throw new Error(`Naver minute HTTP ${response.status}`);
-  return normalizeKoreanIntradayRows(normalized, parseNaverMinuteRows(normalized, await response.text()));
+  const startKey = koreanDateKeyForTimestamp((anchorTimestamp || Math.floor(Date.now() / 1000)) - lookbackDays * 86400);
+  const endTime = isKoreanSymbol(normalized) ? "2000" : "1530";
+  const url = `https://api.finance.naver.com/siseJson.naver?symbol=${encodeURIComponent(code)}&requestType=1&startTime=${startKey}0900&endTime=${dateKey}${endTime}&timeframe=minute`;
+  const cached = naverMinuteCache.get(url);
+  if (cached?.task) return cached.task;
+  if (cached?.until > Date.now()) return cached.rows;
+  const entry = {};
+  entry.task = (async () => {
+    const response = await fetchWithTimeout(url, 3500);
+    if (!response.ok) throw new Error(`Naver minute HTTP ${response.status}`);
+    entry.rows = normalizeKoreanIntradayRows(normalized, parseNaverMinuteRows(normalized, await response.text()));
+    entry.until = Date.now() + 7000;
+    return entry.rows;
+  })().finally(() => { entry.task = null; });
+  naverMinuteCache.set(url, entry);
+  if (naverMinuteCache.size > 100) naverMinuteCache.delete(naverMinuteCache.keys().next().value);
+  return entry.task;
 }
 
 async function fetchKisQuote(symbol) {
@@ -1029,8 +1071,8 @@ function normalizeKoreanIntradayRows(symbol, rows, options = {}) {
     const isDelayedClosingPrint = minute >= finalPrintStart && minute <= finalPrintEnd;
     const time = isDelayedClosingPrint ? replaceKoreanTime(row.time, 15, 30) : minuteBucket(row.time);
     const isPreNtx = allowExtended && minute >= 8 * 60 && minute <= 8 * 60 + 50;
-    const isAfterNtx = allowExtended && minute >= 15 * 60 + 40 && minute <= 20 * 60;
-    if (!isPreNtx && !isAfterNtx) {
+    const isAfterMarket = isKoreanSymbol(symbol) && minute >= (allowExtended ? 15 * 60 + 40 : 16 * 60) && minute <= 20 * 60;
+    if (!isPreNtx && !isAfterMarket) {
       if (minute < 9 * 60) continue;
       if (minute >= closingAuctionStart && minute < closingAuctionEnd) continue;
       if (minute > closeMinute && !isDelayedClosingPrint) continue;
@@ -1057,7 +1099,9 @@ function applyKoreanClosingPrint(symbol, rows, payload) {
   const marketTime = Number(payload.marketTime || payload.asOf);
   const price = Number(payload.price);
   if ((!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) || !Number.isFinite(marketTime) || !Number.isFinite(price)) return rows;
-  if (koreanMinuteOfDay(marketTime) < 15 * 60 + 30) return rows;
+  const minute = koreanMinuteOfDay(marketTime);
+  // An after-market quote must never rewrite the 15:30 auction close.
+  if (minute < 15 * 60 + 30 || minute > 15 * 60 + 32 || isNaverNtxQuote(payload)) return rows;
 
   const closeTime = replaceKoreanTime(marketTime, 15, 30);
   const next = rows.filter((row) => row.time !== closeTime);
@@ -1290,7 +1334,7 @@ function applyKoreanNtxDaily(rows, quote) {
 function normalizeLiveQuoteBucket(symbol, timestamp) {
   if (!isKoreanSymbol(symbol) && !isKoreanIndex(symbol)) return timestamp;
   const minute = koreanMinuteOfDay(timestamp);
-  if (minute >= 15 * 60 + 30) return replaceKoreanTime(timestamp, 15, 30);
+  if (minute >= 15 * 60 + 30 && minute <= 15 * 60 + 32) return replaceKoreanTime(timestamp, 15, 30);
   return timestamp;
 }
 
@@ -1300,6 +1344,12 @@ function applyLiveQuoteToRows(rows, quote, intervalSeconds = 60, symbol = "") {
   const last = next.at(-1);
   const quoteTime = Number(quote.marketTime || quote.asOf || Math.floor(Date.now() / 1000));
   const bucketTime = normalizeLiveQuoteBucket(symbol, Math.floor(quoteTime / intervalSeconds) * intervalSeconds);
+  if (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) {
+    const minute = koreanMinuteOfDay(quoteTime);
+    const regular = minute >= 9 * 60 && (minute < 15 * 60 + 20 || (minute >= 15 * 60 + 30 && minute <= 15 * 60 + 32));
+    const after = isKoreanSymbol(symbol) && minute >= 16 * 60 && minute <= 20 * 60;
+    if ((!regular && !after) || bucketTime < last.time) return rows;
+  }
   const now = Math.floor(Date.now() / 1000);
   if (bucketTime > now + Math.max(120, intervalSeconds)) return rows;
   const stepCount = Math.max(0, Math.floor((bucketTime - last.time) / intervalSeconds));
@@ -1728,10 +1778,8 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
     if (KIS_ENABLED && isKoreanSymbol(normalized) && isIntradayInterval(interval) && !preferNaverNxt) {
       kisMeta.intradayAttempted = true;
       try {
-        // Pass yahooLastTime=0 to always fetch the full trading day from KIS.
-        // Yahoo Finance often has gaps in the 15:00-15:19 range for Korean stocks,
-        // so we cannot rely on yahooLastTime to determine where KIS should start.
-        kisIntradayRows = await fetchKisIntradayRows(normalized, 0);
+        // Fetch dated history, including previous-session after-market bars.
+        kisIntradayRows = await fetchKisIntradayRows(normalized, Math.min(10000, limit * config.seconds / 60));
         kisMeta.intradayOk = true;
         kisMeta.intradayCount = kisIntradayRows.length;
       } catch (error) {
@@ -1786,7 +1834,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
     if ((isKoreanSymbol(normalized) || isKoreanIndex(normalized)) && isIntradayInterval(interval)) {
       try {
         const naverAnchor = liveQuote?.marketTime || liveQuote?.asOf || yahooLastTime || Math.floor(Date.now() / 1000);
-        naverMinuteRows = await fetchNaverMinuteRows(normalized, naverAnchor);
+        naverMinuteRows = await fetchNaverMinuteRows(normalized, naverAnchor, Math.max(7, Math.min(45, Math.ceil(limit * config.seconds / 60 / 600) * 2)));
       } catch {
         naverMinuteRows = [];
       }
@@ -1853,6 +1901,20 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       payload.source = liveQuote.source;
       payload.kis = kisMeta;
     }
+    if (kisIntradayRows.length) {
+      const last = kisIntradayRows.at(-1);
+      // A later KIS print wins over a delayed/stale fallback quote.
+      if (!liveQuote || last.time > Number(liveQuote.marketTime || liveQuote.asOf)) {
+        payload.price = last.close;
+        payload.marketTime = last.time;
+        payload.asOf = last.time;
+        payload.source = "kis-intraday";
+        payload.marketStatus = koreanStockStatus(last.time);
+        payload.change = last.close - payload.previousClose;
+        payload.changePercent = payload.previousClose ? payload.change / payload.previousClose * 100 : 0;
+        liveQuote = { ...payload, series: undefined };
+      }
+    }
     if (!payload.series.length) throw new Error("No chart data");
     let series = isIntradayInterval(interval)
       ? normalizeKoreanIntradayRows(normalized, payload.series)
@@ -1882,7 +1944,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       payload.source = "kis-index-timeprice";
     }
     if (isIntradayInterval(interval) && liveQuote && (isKoreanSymbol(normalized) || isKoreanIndex(normalized)) && !isNaverNtxQuote(liveQuote)) {
-      series = applyLiveQuoteToRows(series, liveQuote, config.aggregate ? 60 : config.seconds, normalized);
+      series = applyLiveQuoteToRows(series, liveQuote, 60, normalized);
     }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
     if (isIntradayInterval(interval)) series = removeFutureIntradayRows(series, config.seconds);
@@ -1898,10 +1960,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
     if (isIntradayInterval(interval) && liveQuote && !isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) {
       series = applyLiveQuoteToRows(series, liveQuote, config.seconds, normalized);
     }
-    const effectiveLimit = isIntradayInterval(interval) && isKoreanSymbol(normalized) && mode === "NTX"
-      ? Math.max(limit, 620)
-      : limit;
-    const trimmed = series.slice(-effectiveLimit);
+    const trimmed = series.slice(-limit);
     const lastClose = trimmed.at(-1)?.close;
     const prevClose = trimmed.at(-2)?.close;
     let price = payload.price;
