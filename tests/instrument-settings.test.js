@@ -6,22 +6,22 @@ import { manualSearchItem } from '../public/symbol-input.js';
 import { parseYahooSearchResults } from '../lib/symbol-search.js';
 import { validSymbol } from '../public/dashboard-model.js';
 
-test('settings save exactly 20 slots while preserving timeframes and symbol-shared lines', () => {
+test('settings save exactly 40 slots while preserving timeframes and symbol-shared lines', () => {
   const state = createDashboard();
-  state.slots[19].interval = '1m'; state.slots[19].limit = 400;
+  state.slots[39].interval = '1m'; state.slots[39].limit = 400;
   state.lines['000660.KS'] = [{ id: 'kept' }];
   const draft = structuredClone(state.slots);
   draft[3] = manualSearchItem('S&P500');
-  draft[19] = manualSearchItem('QQQ');
+  draft[39] = manualSearchItem('QQQ');
   const changes = instrumentChanges(draft, state.slots);
-  assert.deepEqual(changes.map(change => change.index), [3, 19]);
+  assert.deepEqual(changes.map(change => change.index), [3, 39]);
   const saved = applyChanges(state, changes);
   assert.equal(saved.slots[3].symbol, '^GSPC');
-  assert.equal(saved.slots[19].symbol, 'QQQ.US');
-  assert.equal(saved.slots[19].interval, '1m');
-  assert.equal(saved.slots[19].limit, 400);
+  assert.equal(saved.slots[39].symbol, 'QQQ.US');
+  assert.equal(saved.slots[39].interval, '1m');
+  assert.equal(saved.slots[39].limit, 400);
   assert.deepEqual(saved.lines, state.lines);
-  assert.equal(state.slots[19].symbol, 'AMD.US');
+  assert.equal(state.slots[39].symbol, 'AMD.US');
   assert.deepEqual(instrumentChanges(saved.slots, saved.slots), []);
 });
 

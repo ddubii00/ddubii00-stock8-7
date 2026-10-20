@@ -1,7 +1,7 @@
 import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly } from "./chart-indicators.js";
 import { calculateThreeLineBreak } from "./three-line-break.js";
 import { SharedDashboard } from "./shared-dashboard.js";
-import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount } from "./dashboard-model.js";
+import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount, adjacentPage } from "./dashboard-model.js";
 import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
@@ -1135,7 +1135,11 @@ document.querySelector("#layoutButton").addEventListener("click", () => {
   button.setAttribute("aria-label", `배치 ${LAYOUTS[layoutIndex]}`);
 });
 document.querySelector("#nextButton").addEventListener("click", () => {
-  activePage = (activePage + 1) % PAGE_COUNT;
+  activePage = adjacentPage(activePage, 1);
+  void renderPage();
+});
+document.querySelector("#previousButton").addEventListener("click", () => {
+  activePage = adjacentPage(activePage, -1);
   void renderPage();
 });
 

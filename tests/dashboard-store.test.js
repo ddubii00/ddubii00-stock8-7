@@ -4,12 +4,12 @@ import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDashboardStore } from '../lib/dashboard-store.js';
-import { createDashboard, applyChanges, LAYOUTS } from '../public/dashboard-model.js';
+import { createDashboard, applyChanges, LAYOUTS, adjacentPage } from '../public/dashboard-model.js';
 const line = (id) => ({id,start:{time:1700000000,price:100},end:{time:1700086400,price:120},width:1});
 
-test('five independent pages default to four charts and the exact layout cycle', () => {
+test('ten independent pages default to four charts and the exact layout cycle', () => {
   const state = createDashboard();
-  assert.equal(state.slots.length, 20);
+  assert.equal(state.slots.length, 40);
   assert.deepEqual(LAYOUTS, ['2x2','1x3','3x1','1x1','2x1','1x2']);
   const next = applyChanges(state,[{type:'slot',index:4,patch:{symbol:'000660.KS',name:'SK하이닉스'}}]);
   assert.equal(next.slots[0].symbol, next.slots[4].symbol);
@@ -43,7 +43,7 @@ test('invalid writes do not corrupt storage or block later updates; legacy impor
   const directory = await mkdtemp(join(tmpdir(),'stock8-invalid-'));
   t.after(()=>rm(directory,{recursive:true,force:true}));
   const store = await createDashboardStore(directory);
-  await assert.rejects(store.update({id:'bad',changes:[{type:'slot',index:20,patch:{name:'oops'}}]}));
+  await assert.rejects(store.update({id:'bad',changes:[{type:'slot',index:40,patch:{name:'oops'}}]}));
   const items = Array.from({length:4},()=>({symbol:'TSLA.US',name:'Tesla'}));
   await store.update({id:'legacy',changes:[{type:'importLegacy',items}]});
   await store.update({id:'good',changes:[{type:'slot',index:0,patch:{symbol:'AAPL.US',name:'Apple'}}]});
@@ -61,4 +61,35 @@ test('a malformed saved file is preserved instead of being silently reset', asyn
   await writeFile(path,'broken-json');
   await assert.rejects(createDashboardStore(directory),/원본을 보존/);
   assert.equal(await readFile(path,'utf8'),'broken-json');
+});
+
+
+test('previous/next wrap around all ten pages', () => {
+  assert.equal(adjacentPage(0, -1), 9);
+  assert.equal(adjacentPage(9, 1), 0);
+  for (let page = 0; page < 10; page++) assert.equal(adjacentPage(adjacentPage(page, 1), -1), page);
+});
+
+test('five-page storage expands atomically without losing slots, shared lines or deduplication IDs', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'stock8-migrate-'));
+  t.after(() => rm(directory, {recursive:true, force:true}));
+  const state = createDashboard(); state.slots = state.slots.slice(0, 20);
+  state.initialized = true; state.revision = 17;
+  state.slots[19] = {...state.slots[19], symbol:'AAPL.US', name:'Custom Apple', interval:'5m', limit:400};
+  state.lines['AAPL.US'] = [line('kept')];
+  const applied = ['saved-operation'];
+  const path = join(directory, 'dashboard.json');
+  await writeFile(path, JSON.stringify({state, applied}));
+  const store = await createDashboardStore(directory);
+  assert.deepEqual(store.get().slots.slice(0, 20), state.slots);
+  assert.deepEqual(store.get().lines, state.lines);
+  assert.equal(store.get().slots.length, 40);
+  assert.equal(store.get().revision, 17);
+  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')).applied, applied);
+  await store.update({id:'saved-operation', changes:[{type:'slot', index:0, patch:{name:'must not apply'}}]});
+  assert.equal(store.get().slots[0].name, state.slots[0].name);
+  await store.update({id:'tenth-page', changes:[{type:'slot', index:39, patch:{symbol:'AAPL.US', name:'Apple page 10'}}]});
+  const reopened = await createDashboardStore(directory);
+  assert.deepEqual(reopened.get(), store.get());
+  assert.deepEqual(reopened.get().lines[reopened.get().slots[39].symbol], state.lines['AAPL.US']);
 });

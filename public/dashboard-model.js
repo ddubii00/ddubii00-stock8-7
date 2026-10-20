@@ -1,7 +1,11 @@
 import { isFuturesSymbol } from './instrument-catalog.js';
 
-export const PAGE_COUNT = 5;
+export const PAGE_COUNT = 10;
 export const SLOTS_PER_PAGE = 4;
+export const SLOT_COUNT = PAGE_COUNT * SLOTS_PER_PAGE;
+export function adjacentPage(page, direction) {
+  return (page + direction + PAGE_COUNT) % PAGE_COUNT;
+}
 export const LAYOUTS = ['2x2', '1x3', '3x1', '1x1', '2x1', '1x2'];
 export function layoutChartCount(layout) {
   const [columns, rows] = layout.split('x').map(Number);
@@ -22,7 +26,10 @@ export function validSymbol(symbol) {
 export function createDashboard() {
   return {
     version: 1, revision: 0, initialized: false,
-    slots: DEFAULTS.map(([symbol, name]) => ({ symbol, name, decimals: /\.(KS|KQ)$/.test(symbol) ? 0 : 2, interval: '1d', limit: 120 })),
+    slots: Array.from({ length: SLOT_COUNT }, (_, index) => {
+      const [symbol, name] = DEFAULTS[index % DEFAULTS.length];
+      return { symbol, name, decimals: /\.(KS|KQ)$/.test(symbol) ? 0 : 2, interval: '1d', limit: 120 };
+    }),
     lines: {}
   };
 }
@@ -50,7 +57,7 @@ export function applyChanges(state, changes) {
   const next = structuredClone(state);
   for (const change of changes) {
     if (change?.type === 'slot') {
-      if (!Number.isInteger(change.index) || change.index < 0 || change.index >= 20) invalid();
+      if (!Number.isInteger(change.index) || change.index < 0 || change.index >= SLOT_COUNT) invalid();
       next.slots[change.index] = { ...next.slots[change.index], ...cleanSlotPatch(change.patch) };
     } else if (change?.type === 'upsertLine') {
       if (!validSymbol(change.symbol)) invalid();
