@@ -88,7 +88,7 @@ let hoveredChart = null;
 
 function syncVerticalCursor() {
   for (const state of chartState.values()) {
-    const sameGroup = hoveredChart && state !== hoveredChart.state && state.alignment && state.alignment === hoveredChart.state.alignment;
+    const sameGroup = !showLineBreak && hoveredChart && state !== hoveredChart.state && state.alignment && state.alignment === hoveredChart.state.alignment;
     const x = sameGroup ? state.instance.chart.timeScale().timeToCoordinate(hoveredChart.time) : null;
     const visible = Number.isFinite(x) && x >= 0 && x <= state.instance.chart.timeScale().width();
     state.syncCursor.hidden = !visible;
@@ -106,7 +106,8 @@ function scheduleTimeAlignment() {
     alignmentFrame = 0;
     const states = [...chartState.values()].filter(state => !state.disposed);
     const ready = states.filter(state => state.rows.length && state.lastPayloadKey === chartRequestKey(state));
-    const groups = buildTimeAlignments(ready.map(state => ({ slotIndex: state.slotIndex, interval: state.interval, limit: state.limit,
+    // Each line-break chart has its own irregular conversion dates and bar count.
+    const groups = showLineBreak ? [] : buildTimeAlignments(ready.map(state => ({ slotIndex: state.slotIndex, interval: state.interval, limit: state.limit,
       rows: state.rows, visibleLimit: visibleRows(state).length, state })), LAYOUTS[layoutIndex]);
     const previous = new Map(states.map(state => [state, state.alignment]));
     for (const state of states) state.alignment = null;
@@ -337,8 +338,10 @@ function calcVisibleSma(state, period) {
 }
 
 function updateBollinger(state) {
-  const bands = state.visible.bb ? calcBollinger(state.rows || []) : [];
+  const visible = !showLineBreak && state.visible.bb;
+  const bands = visible ? calcBollinger(state.rows || []) : [];
   for (const key of ["upper", "middle", "lower"]) {
+    state.instance.bbSeries[key].applyOptions({ visible });
     state.instance.bbSeries[key].setData(bands.map((row) => ({ time: row.time, value: row[key] })));
   }
 }
@@ -709,11 +712,20 @@ function drawMacdBackground(state) {
   }
 }
 
+function syncIndicatorMode(state) {
+  for (const period of MA_PERIODS) {
+    state.instance.maSeries[period].applyOptions({ visible: !showLineBreak && state.visible[`ma${period}`] });
+    if (showLineBreak) state.instance.maSeries[period].setData([]);
+  }
+  updateBollinger(state);
+}
+
 function updateSeriesVisibility(state) {
+  syncIndicatorMode(state);
   const { instance, visible } = state;
   instance.candleSeries.setData(visible.candle ? state.rows : []);
   for (const period of MA_PERIODS) {
-    instance.maSeries[period].setData(visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
+    instance.maSeries[period].setData(!showLineBreak && visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
   }
   updateBollinger(state);
 }
@@ -763,6 +775,7 @@ function applyPayload(state, payload, initial = false) {
   state.rows = rows;
   state.macd = showLineBreak ? [] : calcMacd(rows);
   state.previousClose = Number(payload.previousClose);
+  syncIndicatorMode(state);
 
   // isTickUpdate: same last candle time = only price updated, not a new bar
   const isTickUpdate = !showLineBreak && !initial && isIntraday(state.interval) && previousLastTime === latest?.time;
@@ -806,7 +819,7 @@ function applyPayload(state, payload, initial = false) {
     }
   } else {
     for (const period of MA_PERIODS) {
-      state.instance.maSeries[period].setData(state.visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
+      state.instance.maSeries[period].setData(!showLineBreak && state.visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
     }
   }
 
@@ -971,6 +984,7 @@ async function createCard(item, index) {
     }
   };
   state.instance = createLwChart(stage, state);
+  syncIndicatorMode(state);
   state.syncCursor = document.createElement('div');
   state.syncCursor.className = 'synced-crosshair';
   state.syncCursor.hidden = true;
@@ -1077,6 +1091,7 @@ document.querySelectorAll(".chart-toggle").forEach((button) => {
     if (feature === "bb") showBollinger = !showBollinger;
     if (feature === "weekly") globalWeekly = !globalWeekly;
     if (feature === "line-break") showLineBreak = !showLineBreak;
+    if (feature === "line-break") syncVerticalCursor();
     const enabled = feature === "bb" ? showBollinger : feature === "weekly" ? globalWeekly : showLineBreak;
     button.classList.toggle("active", enabled);
     button.setAttribute("aria-pressed", String(enabled));
@@ -1096,6 +1111,7 @@ document.querySelectorAll(".chart-toggle").forEach((button) => {
         renderTimeframeButtons(state.card, state);
         await refreshCard(state, true);
       } else if (feature === "line-break") {
+        syncIndicatorMode(state);
         state.trendEditor?.reset();
         await refreshCard(state, true);
       }
