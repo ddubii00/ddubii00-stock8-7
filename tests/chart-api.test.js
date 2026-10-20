@@ -28,6 +28,8 @@ test('chart API supplies longer real history for line breaks and never fabricate
     if (query==='하이닉스') assert.ok(results.some(item=>item.name.includes('ETF')));
   }
   const chart=path=>fetch(base+'/api/chart?'+path,{headers});
+  const resolved=await(await fetch(base+'/api/search?q=196170',{headers})).json();
+  assert.equal(resolved.results.length,1);assert.equal(resolved.results[0].symbol,'196170.KQ');assert.equal(resolved.results[0].name,'알테오젠');
   const family=await(await fetch(base+'/api/search?q='+encodeURIComponent('나스닥'),{headers})).json();
   for(const symbol of ['^IXIC','^NDX','NQ=F','QQQ.US','QQQM.US','TQQQ.US','SQQQ.US','133690.KS'])assert.ok(family.results.some(item=>item.symbol===symbol),symbol);
   for(const query of ['나스닥100 선물','NQ','NQ=F']) {

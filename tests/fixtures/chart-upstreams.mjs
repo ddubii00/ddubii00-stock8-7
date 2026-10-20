@@ -4,6 +4,7 @@ while ([0,6].includes(date.getUTCDay())) date.setUTCDate(date.getUTCDate()-1);
 const dateKey = date.toISOString().slice(0,10).replaceAll('-','');
 globalThis.fetch = async input => {
   const url = new URL(String(input));
+  if (url.hostname==='m.stock.naver.com' && url.pathname==='/api/stock/196170/basic') return Response.json({itemCode:'196170',stockName:'알테오젠',stockExchangeType:{code:'KQ'}});
   if (url.hostname==='finance.naver.com' && url.pathname==='/api/sise/etfItemList.nhn') {
     return Response.json({result:{etfItemList:[...Array.from({length:15},(_,i)=>({itemcode:String(100000+i),itemname:`하이닉스 관련 ETF ${i}`})),{itemcode:'133690',itemname:'TIGER 미국나스닥100'}]}}, {headers:{'Content-Type':'application/json; charset=UTF-8'}});
   }
