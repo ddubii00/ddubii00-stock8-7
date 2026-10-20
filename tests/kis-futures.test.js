@@ -145,3 +145,41 @@ test('an appkey used by stock5-8 is left alone and retries wait five minutes; we
   assert.equal(Socket.instances.length, before + 1);
   assert.equal((await api.quote()).marketStatus, 'KIS 지연/마감');
 });
+
+test('automatic NQ rollover checks the master every five minutes, changes subscription and isolates contract prices/history', async t => {
+  let clock = at, selected = 'NQZ26', downloads = 0;
+  const masterZip = code => {
+    const chars = Array(223).fill(' ');
+    for (const [start, value] of [[0,code],[132,'CME'],[142,'NQ'],[217,'1'],[218,'1']]) [...value].forEach((v,i) => { chars[start+i] = v; });
+    const data = Buffer.from(chars.join('') + '\n'), name = Buffer.from('ffcode.mst');
+    const local = Buffer.alloc(30);local.writeUInt32LE(0x04034b50);local.writeUInt32LE(data.length,18);local.writeUInt32LE(data.length,22);local.writeUInt16LE(name.length,26);
+    const central = Buffer.alloc(46);central.writeUInt32LE(0x02014b50);central.writeUInt32LE(data.length,20);central.writeUInt32LE(data.length,24);central.writeUInt16LE(name.length,28);
+    const end = Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(1,8);end.writeUInt16LE(1,10);end.writeUInt32LE(central.length+name.length,12);end.writeUInt32LE(local.length+name.length+data.length,16);
+    return Buffer.concat([local,name,data,central,name,end]);
+  };
+  const requested = [];
+  const api = createKisFutures({ now:()=>clock, WebSocketImpl:Socket, approval:async ()=>'approval',
+    fetcher:async () => { downloads++; return new Response(masterZip(selected)); },
+    request:async (path,tr,params) => {
+      requested.push(params.SRS_CD);
+      const price = params.SRS_CD === 'NQZ26' ? 25000 : 35000;
+      const p = { ...output, last_price:String(price), prev_price:String(price-100), open_price:String(price), high_price:String(price+10), low_price:String(price-10) };
+      return path.endsWith('inquire-price') ? {output1:p} : {output2:[{...p, data_date:'20261020', data_time:'133600', vol:'10'}]};
+    } });
+  t.after(()=>api.close());
+  const first = await api.chart('1m',40);
+  assert.equal(first.contract,'NQZ26');assert.equal(first.contractMode,'automatic');assert.equal(first.price,25000);
+  await Promise.resolve();const oldSocket=Socket.instances.at(-1);oldSocket.open();
+  oldSocket.message(frame('25005.75'));
+  selected='NQH27';clock+=4*60000;
+  assert.equal(await api.contract(),'NQZ26');assert.equal(downloads,1);
+  clock+=60001;
+  const second=await api.chart('1m',40);
+  assert.equal(downloads,2);assert.equal(second.contract,'NQH27');assert.equal(second.price,35000);
+  assert.ok(second.series.every(r=>r.low>34000));assert.equal(oldSocket.readyState,3);
+  await Promise.resolve();const newSocket=Socket.instances.at(-1);newSocket.open();
+  assert.equal(JSON.parse(newSocket.sent[0]).body.input.tr_key,'NQH27');
+  oldSocket.message(frame('99999.75'));
+  assert.equal((await api.chart('1m',40)).price,35000);
+  assert.ok(requested.includes('NQZ26')&&requested.includes('NQH27'));
+});

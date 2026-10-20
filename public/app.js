@@ -716,7 +716,7 @@ function renderLegend(state, payload) {
   statusEl.textContent = payload.marketStatus || "종가";
   statusEl.className = `market-status ${direction}`;
   statusEl.title = isFuturesSymbol(state.item.symbol)
-    ? [payload.contract ? `월물 ${payload.contract}` : 'Yahoo Finance 지연 시세',
+    ? [payload.contract ? `월물 ${payload.contract}${payload.contractMode === 'automatic' ? ' · 자동 교체' : payload.contractMode === 'fixed' ? ' · 고정' : ''}` : 'Yahoo Finance 지연 시세',
       payload.marketTime || payload.asOf ? `시세 시각 ${new Date((payload.marketTime || payload.asOf) * 1000).toLocaleString('ko-KR')}` : '', payload.streamError || ''].filter(Boolean).join('\n') : '';
   card.querySelector(".last-change").textContent = formatChange(changePct, 2);
   card.querySelector(".last-change").className = `last-change ${direction}`;
@@ -725,6 +725,11 @@ function renderLegend(state, payload) {
 }
 
 function applyPayload(state, payload, initial = false) {
+  if (payload.contract && state.lastPayload?.contract && payload.contract !== state.lastPayload.contract) {
+    // A different contract starts its own price range and line-break history.
+    initial = true;
+    state.trendEditor?.reset();
+  }
   let sourceRows = payload.series || [];
   if (!sourceRows.length) throw new Error("시세 데이터가 없습니다.");
   if (showLineBreak && /^fallback/.test(payload.source || "")) throw new Error("실제 시세 데이터를 받지 못했습니다.");
