@@ -20,6 +20,13 @@ test('chart API supplies longer real history for line breaks and never fabricate
   const base=`http://127.0.0.1:${port}/stock8-7`;
   const login=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'1222'})});
   const headers={cookie:login.headers.get('set-cookie').split(';')[0]};
+  for (const query of ['하이닉스','SK하이닉스','하닉']) {
+    const response=await fetch(base+'/api/search?q='+encodeURIComponent(query),{headers});
+    const {results}=await response.json();
+    assert.equal(results[0].symbol,'000660.KS');
+    assert.equal(results[0].name,'SK하이닉스');
+    if (query==='하이닉스') assert.ok(results.some(item=>item.name.includes('ETF')));
+  }
   const chart=path=>fetch(base+'/api/chart?'+path,{headers});
   const normal=await(await chart('symbol=AAPL.US&interval=1m&limit=10000')).json();
   assert.equal(normal.series.length,700);

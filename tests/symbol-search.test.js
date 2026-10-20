@@ -57,3 +57,20 @@ test('known codes work offline and invalid metadata cannot substitute another st
   assert.equal(parseKoreanMetadata({itemCode:'005930',stockName:'Wrong',stockExchangeType:{code:'KS'}},'196170'),null);
   assert.equal(parseKoreanMetadata({itemCode:'196170',stockName:'알테오젠'},'196170'),null);
 });
+
+test('company names and aliases stay ahead of a full page of related ETFs',()=>{
+  const etfs=Array.from({length:12},(_,i)=>({symbol:`${String(i+100000)}.KS`,name:`하이닉스 관련 ETF ${i}`}));
+  const stock={symbol:'000660.KS',name:'SK하이닉스',aliases:['하이닉스','하닉','hynix']};
+  for(const query of ['하이닉스','SK 하이닉스','하닉','hynix']) {
+    const results=prioritizeExactInstrument([...etfs,stock],query).slice(0,12);
+    assert.equal(results[0].symbol,'000660.KS');
+  }
+  assert.equal(prioritizeExactInstrument([stock,...etfs],'하이닉스 관련 ETF 3')[0].symbol,etfs[3].symbol);
+});
+
+test('English company-name matches do not add guessed US tickers',()=>{
+  const apple={symbol:'AAPL.US',name:'Apple',aliases:['애플']};
+  assert.deepEqual(searchResultsWithFallback([apple],'Apple'),[apple]);
+  assert.equal(prioritizeExactInstrument([{symbol:'OTHER.US',name:'Apple related ETF'},apple],'Apple')[0].symbol,'AAPL.US');
+  assert.deepEqual(searchResultsWithFallback([],'AAPL'),[{symbol:'AAPL.US',name:'AAPL'}]);
+});

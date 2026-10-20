@@ -4,6 +4,9 @@ export function normalizeSearchQuery(value) {
   return String(value || '').normalize('NFKC').trim();
 }
 
+const compactName = value => normalizeSearchQuery(value).toUpperCase().replace(/\s+/g, '');
+const instrumentNames = item => [item.name, ...(item.aliases || [])].map(compactName).filter(Boolean);
+
 export function parseKoreanCode(value) {
   const query = normalizeSearchQuery(value).toUpperCase();
   const match = query.match(/^(?:A([0-9][A-Z0-9]{5})|([0-9][A-Z0-9]{5}|[0-9]{1,5}))(?:\.(KS|KQ))?$/);
@@ -37,6 +40,8 @@ export function manualSearchItem(value) {
 
 export function searchResultsWithFallback(results, query) {
   const items = [...(results || [])];
+  // An actual company name (e.g. Apple) must not become an invented ticker.
+  if (items.some(item => instrumentNames(item).includes(compactName(query)))) return items;
   const manual = manualSearchItem(query);
   if (!manual) return items;
   const korean = parseKoreanCode(query);
@@ -52,5 +57,16 @@ export function prioritizeExactInstrument(results, query) {
   const exact = item => korean
     ? item.symbol?.slice(0, 6) === korean.code && /\.(KS|KQ)$/.test(item.symbol)
     : ticker ? item.symbol === `${ticker}.US` : false;
-  return [...results.filter(exact), ...results.filter(item => !exact(item))];
+  const q = compactName(query);
+  if (!q) return [...results];
+  const rank = item => {
+    if (exact(item) || compactName(item.symbol) === q) return 0;
+    const names = instrumentNames(item);
+    if (names.includes(q)) return 1;
+    if (names.some(name => name.startsWith(q))) return 2;
+    if (names.some(name => name.includes(q))) return 3;
+    return 4;
+  };
+  return results.map((item, index) => ({ item, index, score: rank(item) }))
+    .sort((a, b) => a.score - b.score || a.index - b.index).map(({ item }) => item);
 }

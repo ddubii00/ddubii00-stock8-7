@@ -4,6 +4,9 @@ while ([0,6].includes(date.getUTCDay())) date.setUTCDate(date.getUTCDate()-1);
 const dateKey = date.toISOString().slice(0,10).replaceAll('-','');
 globalThis.fetch = async input => {
   const url = new URL(String(input));
+  if (url.hostname==='finance.naver.com' && url.pathname==='/api/sise/etfItemList.nhn') {
+    return Response.json({result:{etfItemList:Array.from({length:15},(_,i)=>({itemcode:String(100000+i),itemname:`하이닉스 관련 ETF ${i}`}))}}, {headers:{'Content-Type':'application/json; charset=UTF-8'}});
+  }
   if (url.hostname.includes('finance.yahoo.com') && url.pathname.includes('/v8/finance/chart/')) {
     const symbol=decodeURIComponent(url.pathname.split('/').at(-1));
     if (symbol==='FAIL' || symbol==='005930.KS') return new Response('unavailable',{status:503});

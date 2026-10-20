@@ -1637,7 +1637,9 @@ async function searchSymbols(query) {
     searchNaverWebSymbols(query),
     searchUsSymbols(query)
   ]);
-  const results = prioritizeExactInstrument(mergeSearchResults(etfMatches, staticMatches, koreanMatches, koreanMasterMatches, naverWebMatches, usMatches), query);
+  // Rank all providers together before limiting, so related ETFs cannot crowd
+  // an exact company-name/alias match out of the 12 visible results.
+  const results = prioritizeExactInstrument(mergeSearchResults(staticMatches, koreanMatches, koreanMasterMatches, etfMatches, naverWebMatches, usMatches), query);
   if (korean) {
     const exact = results.filter(item => item.symbol.slice(0, 6) === korean.code);
     return exact.length ? exact : [manualSearchItem(query)];
