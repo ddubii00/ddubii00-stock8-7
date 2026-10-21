@@ -26,3 +26,16 @@ test('token failures retain KIS response codes without returning raw non-JSON bo
     assert.match(error.message,/token HTTP 502/);assert.doesNotMatch(error.message,/html|private/);return true;
   });
 });
+
+test('malformed KIS CME entitlement errors retain their code and safe subscription hint', async () => {
+  const client = createKisClient({ appKey:'private-key', appSecret:'private-secret', baseUrl:'https://kis.example',
+    fetcher:async url => String(url).endsWith('tokenP') ? Response.json({access_token:'private-token', expires_in:86400})
+      : new Response('{rt_cd:"1","msg1":"CME SUB거래소 신청 계좌가 아닙니다.","msg_cd":"EGW00550"}',
+        { status:500, headers:{'Content-Type':'application/json'} }) });
+  await assert.rejects(client.request('/quote','HHDFC55010000',{}), error => {
+    assert.equal(error.kisCode, 'EGW00550');
+    assert.match(error.message,/HHDFC55010000 HTTP 500.*EGW00550.*CME SUB거래소 신청 계좌가 아닙니다.*CME 시세 신청/);
+    assert.doesNotMatch(error.message,/private-key|private-secret|private-token/);
+    return true;
+  });
+});

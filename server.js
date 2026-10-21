@@ -1636,11 +1636,11 @@ function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {
   return rows;
 }
 
-function isKisTokenIssuanceLimit(error) {
-  return error?.kisCode === "EGW00133";
+function canFallbackFromKisFutures(error) {
+  return error?.kisCode === "EGW00133" || error?.kisCode === "EGW00550";
 }
 
-async function getYahooFuturesAfterTokenLimit(interval, limit, kisError) {
+async function getYahooFuturesAfterKisFailure(interval, limit, kisError) {
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
   const query = `range=${encodeURIComponent(config.range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=true`;
   for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
@@ -1670,7 +1670,7 @@ async function getIntraday(symbol, interval = "1m", mode = "KRX") {
     const futuresInterval = INTERVAL_CONFIG[interval] && isIntradayInterval(interval) ? interval : "1m";
     try { return await kisFutures.chart(futuresInterval, 400); }
     catch (error) {
-      if (isKisTokenIssuanceLimit(error)) return getYahooFuturesAfterTokenLimit(futuresInterval, 400, error);
+      if (canFallbackFromKisFutures(error)) return getYahooFuturesAfterKisFailure(futuresInterval, 400, error);
       throw error;
     }
   }
@@ -1715,7 +1715,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       return { ...(await kisFutures.chart(INTERVAL_CONFIG[interval] ? interval : "1d", limit)),
         kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: true } };
     } catch (error) {
-      if (isKisTokenIssuanceLimit(error)) return getYahooFuturesAfterTokenLimit(interval, limit, error);
+      if (canFallbackFromKisFutures(error)) return getYahooFuturesAfterKisFailure(interval, limit, error);
       throw Object.assign(new Error(`KIS 선물 시세 조회 실패. ${kisErrorMessage(error)}`), { status: 503 });
     }
   }
@@ -2010,8 +2010,8 @@ async function getQuote(symbol, mode = "KRX") {
   if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) {
     try { return { ...(await kisFutures.quote()), kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: true } }; }
     catch (error) {
-      if (isKisTokenIssuanceLimit(error)) {
-        const { series, ...quote } = await getYahooFuturesAfterTokenLimit("1m", 1, error);
+      if (canFallbackFromKisFutures(error)) {
+        const { series, ...quote } = await getYahooFuturesAfterKisFailure("1m", 1, error);
         return quote;
       }
       throw Object.assign(new Error(`KIS 선물 현재가 조회 실패. ${kisErrorMessage(error)}`), { status: 503 });

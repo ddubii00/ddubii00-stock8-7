@@ -20,7 +20,8 @@ globalThis.fetch = async (input, options) => {
     ? Response.json({ msg_cd: 'EGW00133', msg1: '접근토큰 발급 잠시 후 다시 시도하세요(1분당 1회)' }, { status: 403 })
     : Response.json({ access_token: 'fixture-token', expires_in: 86400 });
   if (url.pathname.endsWith('Approval')) return Response.json({ approval_key: 'fixture-approval' });
-  if (url.searchParams.get('SRS_CD') === 'NQH27') return Response.json({ rt_cd: '1', msg_cd: 'NO_RIGHTS', msg1: 'not subscribed' });
+  if (url.searchParams.get('SRS_CD') === 'NQH27') return new Response('{rt_cd:"1","msg1":"CME SUB거래소 신청 계좌가 아닙니다.","msg_cd":"EGW00550"}',
+    { status: 500, headers: { 'Content-Type': 'application/json' } });
   if (url.searchParams.get('SRS_CD') === 'NQM27') return Response.json({ rt_cd: '1', msg_cd: 'EGW00201', msg1: '초당 거래건수를 초과하였습니다.' }, {status:500});
   if (url.searchParams.get('SRS_CD') === 'NQZ27' && url.pathname.endsWith('inquire-price')) return Response.json({ rt_cd: '1', msg_cd: 'EGW00201', msg1: '일시적 현재가 오류' }, { status: 500 });
   if (url.pathname.endsWith('inquire-price')) return Response.json({ rt_cd: '0', output1: {

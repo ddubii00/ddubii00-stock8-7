@@ -709,7 +709,7 @@ function renderLegend(state, payload) {
   statusEl.className = `market-status ${direction}`;
   statusEl.title = isFuturesSymbol(state.item.symbol)
     ? [payload.contract ? `월물 ${payload.contract}${payload.contractMode === 'automatic' ? ' · 자동 교체' : payload.contractMode === 'fixed' ? ' · 고정' : ''}` : 'Yahoo Finance 지연 시세',
-      payload.marketTime || payload.asOf ? `시세 시각 ${new Date((payload.marketTime || payload.asOf) * 1000).toLocaleString('ko-KR')}` : '', payload.streamError || ''].filter(Boolean).join('\n') : '';
+      payload.marketTime || payload.asOf ? `시세 시각 ${new Date((payload.marketTime || payload.asOf) * 1000).toLocaleString('ko-KR')}` : '', payload.streamError || payload.kis?.error || ''].filter(Boolean).join('\n') : '';
   card.querySelector(".last-change").textContent = formatChange(changePct, 2);
   card.querySelector(".last-change").className = `last-change ${direction}`;
   card.querySelector(".last-change").title = payload.changeBasis === 'previous-regular-close' && Number.isFinite(payload.previousClose)

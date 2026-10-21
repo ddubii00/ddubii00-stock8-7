@@ -29,7 +29,7 @@ test('configured KIS routes NQ quotes and every chart timeframe through authenti
   const get = await server(t, 'NQZ26');
   const responses = await Promise.all(Array.from({ length: 4 }, () => get('/api/chart?symbol=NQ%3DF&interval=1m&limit=121')));
   for (const response of responses) {
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
     const p = await response.json();
     assert.equal(p.symbol, 'NQ=F'); assert.equal(p.contract, 'NQZ26'); assert.equal(p.price, 30000.75);
     assert.equal(p.source, 'kis-futures-rest'); assert.equal(p.kis.ok, true); assert.equal(p.kis.futuresEnabled, true);
@@ -48,13 +48,29 @@ test('configured KIS routes NQ quotes and every chart timeframe through authenti
   assert.equal(intraday.source, 'kis-futures-rest'); assert.ok(intraday.series.length > 120);
 });
 
-test('KIS entitlement failures are visible errors and cannot silently turn into Yahoo or sample prices', async t => {
+test('KIS CME entitlement failures keep real NQ futures bars with a visible delayed Yahoo label', async t => {
   const get = await server(t, 'NQH27');
-  for (const path of ['/api/chart?symbol=NQ%3DF&interval=1m', '/api/quote?symbol=NQ%3DF']) {
-    const response = await get(path); assert.equal(response.status, 503);
-    const p = await response.json(); assert.match(p.error, /KIS.*CME/); assert.equal(p.series, undefined);
+  for (const path of ['/api/chart?symbol=NQ%3DF&interval=1m', '/api/quote?symbol=NQ%3DF', '/api/intraday?symbol=NQ%3DF']) {
+    const response = await get(path); assert.equal(response.status, 200);
+    const p = await response.json();
+    assert.equal(p.source, 'yahoo-futures-fallback');
+    assert.equal(p.marketStatus, 'Yahoo 지연 시세');
+    assert.equal(p.realtime, false);
+    assert.equal(p.kis.ok, false);
+    assert.match(p.kis.error, /EGW00550.*CME 시세 신청/);
+    assert.ok(p.price > 0);
+    if (!path.includes('/quote')) assert.ok(p.series.length > 0);
     assert.doesNotMatch(JSON.stringify(p), /fixture-secret|fixture-token/);
   }
+});
+
+test('CME entitlement failure without actual alternate bars remains an error', async t => {
+  const get = await server(t, 'NQH27', { FIXTURE_YAHOO_DOWN: '1' });
+  const response = await get('/api/chart?symbol=NQ%3DF&interval=1m');
+  assert.equal(response.status, 503);
+  const payload = await response.json();
+  assert.match(payload.error, /EGW00550/);
+  assert.equal(payload.series, undefined);
 });
 
 test('HTTP 500 preserves the KIS error code and reason instead of labeling all failures as CME permission errors', async t => {
@@ -97,7 +113,7 @@ test('token limit with no real alternate source remains an error, never sample f
 test('a quote-only KIS HTTP 500 still shows actual KIS history without inventing a change rate', async t => {
   const get = await server(t, 'NQZ27');
   const response = await get('/api/chart?symbol=NQ%3DF&interval=1m&limit=80');
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   const payload = await response.json();
   assert.equal(payload.source, 'kis-futures-history');
   assert.equal(payload.marketStatus, 'KIS 봉 시세 (현재가 오류)');
