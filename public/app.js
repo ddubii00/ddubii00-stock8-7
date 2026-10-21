@@ -270,6 +270,7 @@ function applySharedState(value) {
     if (changed) {
       if (symbolChanged) state.trendEditor?.reset();
       state.card.querySelector(".symbol-title").textContent = slot.name;
+      state.card.querySelector(".naver-futures-link").hidden = slot.symbol !== "NQ=F";
       state.card.querySelector(".period-input").value = String(limit);
       renderTimeframeButtons(state.card, state);
       void refreshCard(state, true);
@@ -939,6 +940,7 @@ async function createCard(item, index, view = {}, position = index) {
   card.setAttribute('aria-label', `${item.name || item.symbol} ${view.chartType === 'line-break' ? '삼선전환도' : '캔들차트'}`);
   card.querySelector('.symbol-title').textContent = item.name || item.symbol;
   card.querySelector('.symbol-title').title = item.name || item.symbol;
+  card.querySelector('.naver-futures-link').hidden = item.symbol !== 'NQ=F';
   card.tabIndex = -1;
   chartGrid.append(card);
 
