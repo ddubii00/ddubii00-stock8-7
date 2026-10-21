@@ -313,13 +313,6 @@ function formatAxisPrice(value, symbol) {
   return formatNumber(number, priceDecimalsForSymbol(symbol));
 }
 
-function formatTooltipTime(interval, time) {
-  const date = new Date(time * 1000);
-  const datePart = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  if (!isIntraday(interval)) return datePart;
-  return `${datePart} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
-
 function isIntraday(interval) {
   return !["1d", "1wk", "1mo"].includes(interval);
 }
@@ -530,9 +523,7 @@ function showTooltip(state, param) {
   const decimals = priceDecimalsForSymbol(state.item.symbol);
   const { open, close, changePct } = tooltipValues(state, row);
   const direction = !Number.isFinite(changePct) || changePct >= 0 ? "up" : "down";
-  const [date, time] = formatTooltipTime(state.interval, row.time).split(' ');
   tooltip.innerHTML = `
-    <div class="tooltip-date"><span>${date}</span>${time ? `<span>${time}</span>` : ''}</div>
     <div class="tooltip-row"><span>시가</span><strong>${formatNumber(open, decimals)}</strong></div>
     <div class="tooltip-row"><span>종가</span><strong>${formatNumber(close, decimals)}</strong></div>
     <div class="tooltip-row ${direction}"><span>등락률</span><strong>${formatChange(changePct, 2)}</strong></div>
@@ -541,7 +532,7 @@ function showTooltip(state, param) {
   const controls = state.card.querySelector('.card-controls');
   tooltip.style.left = `${state.instance.chart.timeScale().width() + 2}px`;
   tooltip.style.width = `${state.instance.chart.priceScale('right').width() - 4}px`;
-  tooltip.style.top = `${controls.offsetTop + controls.offsetHeight + 3}px`;
+  tooltip.style.top = `${controls.offsetTop}px`;
   tooltip.style.display = "block";
 }
 

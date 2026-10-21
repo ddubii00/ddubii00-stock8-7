@@ -533,15 +533,6 @@ body {
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
 }
 
-.tooltip-date {
-  display: flex;
-  flex-direction: column;
-  color: var(--muted);
-  font-weight: 800;
-  font-size: 8px;
-  margin-bottom: 2px;
-}
-
 .tooltip-row {
   display: flex;
   justify-content: space-between;
