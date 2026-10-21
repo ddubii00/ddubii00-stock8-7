@@ -109,11 +109,9 @@ function updateMacdMarkers(state) {
 function syncVerticalCursor() {
   for (const state of chartState.values()) {
     const source = hoveredChart?.state;
-    const pairedLineBreak = isComparisonLayout(LAYOUTS[layoutIndex]) && isLineBreak(state) && source?.slotIndex === state.slotIndex;
-    const sameGroup = source && !isLineBreak(source) && (!isLineBreak(state) || pairedLineBreak)
-      && state !== source && state.alignment && state.alignment === source.alignment;
+    const sameGroup = source && state !== source && state.alignment && state.alignment === source.alignment;
     const timeZone = isKoreanSymbol(state.item.symbol) || isKoreanIndex(state.item.symbol) ? 'Asia/Seoul' : 'America/New_York';
-    const targetTime = !sameGroup ? null : pairedLineBreak
+    const targetTime = !sameGroup ? null : isLineBreak(state)
       ? cursorTimeForLineBreak(state.rows, hoveredChart.time)
       : cursorTimeForChart(state.rows, state.interval, hoveredChart.time, timeZone);
     const x = targetTime != null ? state.instance.chart.timeScale().timeToCoordinate(targetTime) : null;
@@ -135,7 +133,7 @@ function scheduleTimeAlignment() {
     const states = [...chartState.values()].filter(state => !state.disposed);
     const ready = states.filter(state => state.rows.length && state.lastPayloadKey === chartRequestKey(state));
     // Share only the cursor timestamp. Every chart owns its data and viewport.
-    const groups = buildCursorGroups(ready.filter(state => isComparisonLayout(LAYOUTS[layoutIndex]) || !isLineBreak(state)), LAYOUTS[layoutIndex]);
+    const groups = buildCursorGroups(ready, LAYOUTS[layoutIndex]);
     for (const state of states) state.alignment = null;
     for (const group of groups) for (const state of group.members) state.alignment = group;
     syncVerticalCursor();
