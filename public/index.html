@@ -14,7 +14,7 @@
           <span id="saveStatus" class="save-status" role="status" hidden></span>
           <div class="navigation-controls">
             <button type="button" id="instrumentsButton" aria-haspopup="dialog" disabled>종목</button>
-            <button type="button" id="layoutButton" title="현재 2x2 (가로 × 세로). 클릭하면 1x3, 3x1, 1x1, 2x1, 1x2, 4x4(두 종목 캔들·삼선) 순으로 변경">배치</button>
+            <button type="button" id="layoutButton" title="현재 2x2 (가로 × 세로). 클릭하면 1x3, 3x1, 1x1, 2x1, 1x2, 4x4(두 종목 캔들·삼선), 한 종목 캔들·삼선 순으로 변경">배치</button>
             <button type="button" id="previousButton" title="이전 차트 페이지 (10장 순환)">이전</button>
             <button type="button" id="nextButton" title="다음 차트 페이지 (10장 순환)">다음</button>
             <span id="pageIndicator" aria-live="polite">1 / 10</span>
@@ -36,7 +36,7 @@
     <dialog id="instrumentsDialog" aria-labelledby="instrumentsTitle">
       <form id="instrumentsForm">
         <div class="settings-heading"><h2 id="instrumentsTitle">종목 설정</h2><button type="button" id="closeInstruments" aria-label="종목 설정 닫기">닫기</button></div>
-        <p class="settings-help">국내·미국 주식, 지수, 선물, ETF를 이름이나 코드로 검색하세요. 예: 나스닥, 나스닥100 선물, NQ, QQQ. 각 장에 4개를 저장하며 1×3·3×1 배치에서는 앞의 3개를 표시합니다. 기존 4종목 배치는 유지하며, 마지막에 추가한 4×4 캔들·삼선 배치는 앞의 2개 종목을 캔들(위)·삼선(아래)으로 표시합니다.</p>
+        <p class="settings-help">국내·미국 주식, 지수, 선물, ETF를 이름이나 코드로 검색하세요. 예: 나스닥, 나스닥100 선물, NQ, QQQ. 각 장에 4개를 저장하며 1×3·3×1 배치에서는 앞의 3개를 표시합니다. 기존 4종목 배치는 유지하며, 4×4 캔들·삼선 배치는 앞의 2개 종목을 캔들(위)·삼선(아래)으로 표시하며, 마지막 한 종목 캔들·삼선 배치는 각 장의 첫 종목만 위아래로 표시합니다.</p>
         <div id="instrumentPages"></div>
         <p id="instrumentsError" role="alert"></p>
         <div class="settings-actions"><button type="button" id="cancelInstruments">취소</button><button type="submit" id="saveInstruments">저장</button></div>

@@ -4,13 +4,13 @@ import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDashboardStore } from '../lib/dashboard-store.js';
-import { createDashboard, applyChanges, LAYOUTS, adjacentPage, layoutViews, layoutChartCount } from '../public/dashboard-model.js';
+import { createDashboard, applyChanges, LAYOUTS, adjacentPage, layoutViews, layoutChartCount, isComparisonLayout } from '../public/dashboard-model.js';
 const line = (id) => ({id,start:{time:1700000000,price:100},end:{time:1700086400,price:120},width:1});
 
 test('ten independent pages default to four charts and the exact layout cycle', () => {
   const state = createDashboard();
   assert.equal(state.slots.length, 40);
-  assert.deepEqual(LAYOUTS, ['2x2','1x3','3x1','1x1','2x1','1x2','4x4']);
+  assert.deepEqual(LAYOUTS, ['2x2','1x3','3x1','1x1','2x1','1x2','4x4','1x2-paired']);
   const next = applyChanges(state,[{type:'slot',index:4,patch:{symbol:'000660.KS',name:'SK하이닉스'}}]);
   assert.equal(next.slots[0].symbol, next.slots[4].symbol);
   assert.equal(state.slots[4].symbol,'NVDA.US');
@@ -107,8 +107,25 @@ test('paired layout shows only the first two saved slots on every page, with fix
     assert.equal(items[2], items[3]);
     assert.equal(items[2], dashboard.slots[page * 4 + 1]);
   }
-  for (const layout of LAYOUTS.filter(layout => layout !== '4x4')) {
+  for (const layout of LAYOUTS.filter(layout => !isComparisonLayout(layout))) {
     assert.deepEqual(layoutViews(layout).map(view => view.slot), Array.from({ length: layoutChartCount(layout) }, (_, index) => index));
     assert.ok(layoutViews(layout).every(view => view.chartType === null && !view.macdSignals));
   }
+});
+
+test('last comparison layout uses only the first saved instrument with candles above line break on all ten pages', () => {
+  assert.equal(LAYOUTS.at(-1), '1x2-paired');
+  assert.ok(isComparisonLayout('1x2-paired'));
+  assert.equal(isComparisonLayout('1x2'), false);
+  assert.equal(layoutChartCount('1x2-paired'), 2);
+  assert.deepEqual(layoutViews('1x2-paired'), [
+    { slot: 0, chartType: 'candles', macdSignals: true },
+    { slot: 0, chartType: 'line-break', macdSignals: false }
+  ]);
+  const state = createDashboard();
+  for (let page = 0; page < 10; page++) {
+    assert.deepEqual(layoutViews('1x2-paired').map(view => state.slots[page*4+view.slot]), [state.slots[page*4],state.slots[page*4]]);
+  }
+  assert.deepEqual(layoutViews('4x4').map(view => view.slot), [0,0,1,1]);
+  assert.deepEqual(layoutViews('1x2').map(view => view.slot), [0,1]);
 });

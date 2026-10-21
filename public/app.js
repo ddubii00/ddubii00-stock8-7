@@ -1,7 +1,7 @@
 import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers } from "./chart-indicators.js";
 import { calculateThreeLineBreak } from "./three-line-break.js";
 import { SharedDashboard } from "./shared-dashboard.js";
-import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount, layoutViews, adjacentPage } from "./dashboard-model.js";
+import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount, layoutViews, isComparisonLayout, adjacentPage } from "./dashboard-model.js";
 import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
@@ -76,7 +76,7 @@ let marketRefreshInFlight = false;
 let chartRefreshInFlight = false;
 let sessionMode = "KRX";
 let showBollinger = true;
-let pairedBollinger = false;
+const comparisonBollinger = new Map();
 let globalWeekly = false;
 let showLineBreak = false;
 let chartFitFrame = 0;
@@ -90,7 +90,7 @@ function isLineBreak(state) {
 }
 
 function bollingerEnabled() {
-  return LAYOUTS[layoutIndex] === '4x4' ? pairedBollinger : showBollinger;
+  return isComparisonLayout(LAYOUTS[layoutIndex]) ? comparisonBollinger.get(LAYOUTS[layoutIndex]) ?? false : showBollinger;
 }
 
 function updateMacdMarkers(state) {
@@ -107,7 +107,7 @@ function updateMacdMarkers(state) {
 function syncVerticalCursor() {
   for (const state of chartState.values()) {
     const source = hoveredChart?.state;
-    const pairedLineBreak = LAYOUTS[layoutIndex] === '4x4' && isLineBreak(state) && source?.slotIndex === state.slotIndex;
+    const pairedLineBreak = isComparisonLayout(LAYOUTS[layoutIndex]) && isLineBreak(state) && source?.slotIndex === state.slotIndex;
     const sameGroup = source && !isLineBreak(source) && (!isLineBreak(state) || pairedLineBreak)
       && state !== source && state.alignment && state.alignment === source.alignment;
     const timeZone = isKoreanSymbol(state.item.symbol) || isKoreanIndex(state.item.symbol) ? 'Asia/Seoul' : 'America/New_York';
@@ -133,7 +133,7 @@ function scheduleTimeAlignment() {
     const states = [...chartState.values()].filter(state => !state.disposed);
     const ready = states.filter(state => state.rows.length && state.lastPayloadKey === chartRequestKey(state));
     // Share only the cursor timestamp. Every chart owns its data and viewport.
-    const groups = buildCursorGroups(ready.filter(state => LAYOUTS[layoutIndex] === '4x4' || !isLineBreak(state)), LAYOUTS[layoutIndex]);
+    const groups = buildCursorGroups(ready.filter(state => isComparisonLayout(LAYOUTS[layoutIndex]) || !isLineBreak(state)), LAYOUTS[layoutIndex]);
     for (const state of states) state.alignment = null;
     for (const group of groups) for (const state of group.members) state.alignment = group;
     syncVerticalCursor();
@@ -1082,9 +1082,9 @@ async function refreshAll(initial = false) {
 document.querySelectorAll(".chart-toggle").forEach((button) => {
   button.addEventListener("click", async () => {
     const feature = button.dataset.feature;
-    if (feature === 'line-break' && LAYOUTS[layoutIndex] === '4x4') return;
+    if (feature === 'line-break' && isComparisonLayout(LAYOUTS[layoutIndex])) return;
     if (feature === "bb") {
-      if (LAYOUTS[layoutIndex] === '4x4') pairedBollinger = !pairedBollinger;
+      if (isComparisonLayout(LAYOUTS[layoutIndex])) comparisonBollinger.set(LAYOUTS[layoutIndex], !bollingerEnabled());
       else showBollinger = !showBollinger;
     }
     if (feature === "weekly") globalWeekly = !globalWeekly;
@@ -1133,7 +1133,7 @@ document.querySelector("#layoutButton").addEventListener("click", () => {
   const previousLayout = LAYOUTS[layoutIndex];
   layoutIndex = (layoutIndex + 1) % LAYOUTS.length;
   chartGrid.dataset.layout = LAYOUTS[layoutIndex];
-  const paired = LAYOUTS[layoutIndex] === '4x4';
+  const paired = isComparisonLayout(LAYOUTS[layoutIndex]);
   const bbButton = document.querySelector('.header-actions [data-feature="bb"]');
   bbButton.classList.toggle('active', bollingerEnabled());
   bbButton.setAttribute('aria-pressed', String(bollingerEnabled()));
@@ -1141,7 +1141,7 @@ document.querySelector("#layoutButton").addEventListener("click", () => {
   lineBreakButton.disabled = paired;
   lineBreakButton.classList.toggle('active', !paired && showLineBreak);
   lineBreakButton.setAttribute('aria-pressed', String(!paired && showLineBreak));
-  if (paired || previousLayout === '4x4') {
+  if (paired || isComparisonLayout(previousLayout)) {
     if (sharedState) void renderPage();
   } else {
     const start = activePage * SLOTS_PER_PAGE;
@@ -1159,8 +1159,11 @@ document.querySelector("#layoutButton").addEventListener("click", () => {
     scheduleTimeAlignment();
   }
   const button = document.querySelector("#layoutButton");
-  button.title = paired ? '새 4x4 캔들·삼선 배치: 첫 두 종목을 위 캔들·아래 삼선으로 표시. 클릭하면 기존 2x2 배치' : `현재 ${LAYOUTS[layoutIndex]} (가로 × 세로). 클릭하면 다음 배치`;
-  button.setAttribute("aria-label", paired ? "배치 4x4 캔들·삼선" : `배치 ${LAYOUTS[layoutIndex]}`);
+  const singleComparison = LAYOUTS[layoutIndex] === '1x2-paired';
+  button.title = singleComparison ? '한 종목 캔들·삼선 배치: 각 장의 첫 종목을 위 캔들·아래 삼선으로 표시. 클릭하면 기존 2x2 배치'
+    : paired ? '4x4 캔들·삼선 배치: 첫 두 종목을 위 캔들·아래 삼선으로 표시. 클릭하면 한 종목 캔들·삼선 배치'
+    : `현재 ${LAYOUTS[layoutIndex]} (가로 × 세로). 클릭하면 다음 배치`;
+  button.setAttribute("aria-label", singleComparison ? "배치 한 종목 캔들·삼선" : paired ? "배치 4x4 캔들·삼선" : `배치 ${LAYOUTS[layoutIndex]}`);
 });
 document.querySelector("#nextButton").addEventListener("click", () => {
   activePage = adjacentPage(activePage, 1);

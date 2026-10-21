@@ -6,20 +6,24 @@ export const SLOT_COUNT = PAGE_COUNT * SLOTS_PER_PAGE;
 export function adjacentPage(page, direction) {
   return (page + direction + PAGE_COUNT) % PAGE_COUNT;
 }
-export const LAYOUTS = ['2x2', '1x3', '3x1', '1x1', '2x1', '1x2', '4x4'];
+export const LAYOUTS = ['2x2', '1x3', '3x1', '1x1', '2x1', '1x2', '4x4', '1x2-paired'];
+export function isComparisonLayout(layout) {
+  return layout === '4x4' || layout === '1x2-paired';
+}
 export function layoutChartCount(layout) {
+  if (layout === '1x2-paired') return 2;
   if (layout === '4x4') return 4; // Two instruments, each with candles above line break.
   const [columns, rows] = layout.split('x').map(Number);
   return columns * rows;
 }
 // Column-major display order. Repeated views use the same saved instrument slot.
 export function layoutViews(layout) {
-  if (layout === '4x4') return [
+  if (isComparisonLayout(layout)) return [
     { slot: 0, chartType: 'candles', macdSignals: true },
     { slot: 0, chartType: 'line-break', macdSignals: false },
     { slot: 1, chartType: 'candles', macdSignals: true },
     { slot: 1, chartType: 'line-break', macdSignals: false }
-  ];
+  ].slice(0, layoutChartCount(layout));
   return Array.from({ length: layoutChartCount(layout) }, (_, slot) => ({ slot, chartType: null, macdSignals: false }));
 }
 export const INTERVALS = ['1m', '3m', '5m', '10m', '15m', '30m', '60m', '1d', '1wk', '1mo'];
