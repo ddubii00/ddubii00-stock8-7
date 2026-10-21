@@ -14,6 +14,7 @@ import { extname, join, normalize, resolve } from "node:path";
 import { createDashboardStore } from "./lib/dashboard-store.js";
 import { createAuth, readJsonBody } from "./lib/auth.js";
 import { createKisClient } from "./lib/kis-client.js";
+import { createKisTokenStore } from "./lib/kis-token-store.js";
 import { createKisFutures } from "./lib/kis-futures.js";
 import { createKisDomesticHistory } from "./lib/kis-domestic-history.js";
 import { createUsPriceChange, usChangeFromBase } from "./lib/us-price-change.js";
@@ -34,10 +35,13 @@ const hasFuturesCredentials = Boolean(process.env.KIS_FUTURES_APP_KEY || process
 const KIS_FUTURES_APP_KEY = hasFuturesCredentials ? process.env.KIS_FUTURES_APP_KEY || "" : KIS_APP_KEY;
 const KIS_FUTURES_APP_SECRET = hasFuturesCredentials ? process.env.KIS_FUTURES_APP_SECRET || "" : KIS_APP_SECRET;
 const KIS_FUTURES_ENABLED = Boolean(KIS_FUTURES_APP_KEY && KIS_FUTURES_APP_SECRET);
-const mainKisClient = createKisClient({ appKey: KIS_APP_KEY, appSecret: KIS_APP_SECRET, baseUrl: KIS_BASE_URL, fetcher: fetchWithTimeout });
+const kisTokenStore = (key, secret) => createKisTokenStore(process.env.KIS_TOKEN_CACHE_DIR || DATA_DIR, KIS_BASE_URL, key, secret);
+const mainKisClient = createKisClient({ appKey: KIS_APP_KEY, appSecret: KIS_APP_SECRET, baseUrl: KIS_BASE_URL, fetcher: fetchWithTimeout,
+  tokenStore: kisTokenStore(KIS_APP_KEY, KIS_APP_SECRET) });
 const kisDomesticHistory = createKisDomesticHistory({ request: mainKisClient.request });
 const futuresClient = KIS_FUTURES_APP_KEY === KIS_APP_KEY && KIS_FUTURES_APP_SECRET === KIS_APP_SECRET ? mainKisClient
-  : createKisClient({ appKey: KIS_FUTURES_APP_KEY, appSecret: KIS_FUTURES_APP_SECRET, baseUrl: KIS_BASE_URL, fetcher: fetchWithTimeout });
+  : createKisClient({ appKey: KIS_FUTURES_APP_KEY, appSecret: KIS_FUTURES_APP_SECRET, baseUrl: KIS_BASE_URL, fetcher: fetchWithTimeout,
+    tokenStore: kisTokenStore(KIS_FUTURES_APP_KEY, KIS_FUTURES_APP_SECRET) });
 const kisFutures = createKisFutures({ ...futuresClient, fetcher: fetchWithTimeout,
   contractOverride: (process.env.KIS_NQ_CONTRACT || "").trim().toUpperCase(),
   wsUrl: process.env.KIS_FUTURES_WS_URL || process.env.KIS_WS_URL || "ws://ops.koreainvestment.com:21000",
@@ -1632,9 +1636,44 @@ function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {
   return rows;
 }
 
+function isKisTokenIssuanceLimit(error) {
+  return error?.kisCode === "EGW00133";
+}
+
+async function getYahooFuturesAfterTokenLimit(interval, limit, kisError) {
+  const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
+  const query = `range=${encodeURIComponent(config.range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=true`;
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const response = await fetchWithTimeout(`https://${host}/v8/finance/chart/NQ%3DF?${query}`, 4500);
+      if (!response.ok) continue;
+      const payload = parseYahooChart("NQ=F", await response.json());
+      if (!payload.series.length) continue;
+      const series = config.aggregate ? aggregateRows(payload.series, config.aggregate) : payload.series;
+      const latest = series.at(-1);
+      const previousClose = Number.isFinite(payload.previousClose) ? payload.previousClose : null;
+      const price = latest.close;
+      const change = previousClose == null ? null : price - previousClose;
+      return { ...payload, price, previousClose, change,
+        changePercent: previousClose ? change / previousClose * 100 : null,
+        asOf: latest.time, marketTime: latest.time, series: series.slice(-limit),
+        marketStatus: "Yahoo 지연 시세", source: "yahoo-futures-fallback", realtime: false,
+        kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: false, error: kisErrorMessage(kisError) } };
+    } catch { /* Try the other real-data endpoint; never create sample futures bars. */ }
+  }
+  throw Object.assign(new Error(`KIS 선물 시세 조회 실패. ${kisErrorMessage(kisError)} 공개 선물 시세도 조회할 수 없습니다.`), { status: 503 });
+}
+
 async function getIntraday(symbol, interval = "1m", mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
-  if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) return kisFutures.chart(INTERVAL_CONFIG[interval] && isIntradayInterval(interval) ? interval : "1m", 400);
+  if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) {
+    const futuresInterval = INTERVAL_CONFIG[interval] && isIntradayInterval(interval) ? interval : "1m";
+    try { return await kisFutures.chart(futuresInterval, 400); }
+    catch (error) {
+      if (isKisTokenIssuanceLimit(error)) return getYahooFuturesAfterTokenLimit(futuresInterval, 400, error);
+      throw error;
+    }
+  }
   try {
     const includePrePost = mode === "NTX" && isUsSymbol(normalized);
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(normalized))}?range=1d&interval=${encodeURIComponent(interval)}&includePrePost=${includePrePost ? "true" : "false"}`;
@@ -1676,6 +1715,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       return { ...(await kisFutures.chart(INTERVAL_CONFIG[interval] ? interval : "1d", limit)),
         kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: true } };
     } catch (error) {
+      if (isKisTokenIssuanceLimit(error)) return getYahooFuturesAfterTokenLimit(interval, limit, error);
       throw Object.assign(new Error(`KIS 선물 시세 조회 실패. ${kisErrorMessage(error)}`), { status: 503 });
     }
   }
@@ -1969,7 +2009,13 @@ async function getQuote(symbol, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
   if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) {
     try { return { ...(await kisFutures.quote()), kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: true } }; }
-    catch (error) { throw Object.assign(new Error(`KIS 선물 현재가 조회 실패. ${kisErrorMessage(error)}`), { status: 503 }); }
+    catch (error) {
+      if (isKisTokenIssuanceLimit(error)) {
+        const { series, ...quote } = await getYahooFuturesAfterTokenLimit("1m", 1, error);
+        return quote;
+      }
+      throw Object.assign(new Error(`KIS 선물 현재가 조회 실패. ${kisErrorMessage(error)}`), { status: 503 });
+    }
   }
   const kisMeta = {
     ...kisStatusPayload(),

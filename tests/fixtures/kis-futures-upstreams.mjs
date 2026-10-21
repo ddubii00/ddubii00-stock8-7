@@ -8,11 +8,21 @@ const parts = time => {
 const current = parts(now);
 globalThis.fetch = async (input, options) => {
   const url = new URL(String(input));
+  if (url.hostname.endsWith('finance.yahoo.com')) {
+    if (process.env.FIXTURE_YAHOO_DOWN === '1') return Response.json({}, { status: 429 });
+    const timestamps = Array.from({ length: 160 }, (_, i) => Math.floor(now / 60) * 60 - (159 - i) * 60);
+    const prices = timestamps.map((_, i) => 29960 + i * 0.25);
+    return Response.json({ chart: { result: [{ meta: { chartPreviousClose: 29900, regularMarketPrice: prices.at(-1) }, timestamp: timestamps,
+      indicators: { quote: [{ open: prices, high: prices.map(p => p + 0.25), low: prices.map(p => p - 0.25), close: prices, volume: prices.map(() => 12) }] } }] } });
+  }
   if (url.hostname !== 'openapi.koreainvestment.com') throw new Error('Unexpected non-KIS source ' + url.hostname);
-  if (url.pathname.endsWith('tokenP')) return Response.json({ access_token: 'fixture-token', expires_in: 86400 });
+  if (url.pathname.endsWith('tokenP')) return process.env.KIS_NQ_CONTRACT === 'NQU27'
+    ? Response.json({ msg_cd: 'EGW00133', msg1: '접근토큰 발급 잠시 후 다시 시도하세요(1분당 1회)' }, { status: 403 })
+    : Response.json({ access_token: 'fixture-token', expires_in: 86400 });
   if (url.pathname.endsWith('Approval')) return Response.json({ approval_key: 'fixture-approval' });
   if (url.searchParams.get('SRS_CD') === 'NQH27') return Response.json({ rt_cd: '1', msg_cd: 'NO_RIGHTS', msg1: 'not subscribed' });
   if (url.searchParams.get('SRS_CD') === 'NQM27') return Response.json({ rt_cd: '1', msg_cd: 'EGW00201', msg1: '초당 거래건수를 초과하였습니다.' }, {status:500});
+  if (url.searchParams.get('SRS_CD') === 'NQZ27' && url.pathname.endsWith('inquire-price')) return Response.json({ rt_cd: '1', msg_cd: 'EGW00201', msg1: '일시적 현재가 오류' }, { status: 500 });
   if (url.pathname.endsWith('inquire-price')) return Response.json({ rt_cd: '0', output1: {
     proc_date: current.date, proc_time: current.clock, sbsnsdate: current.date,
     last_price: '30000.75', prev_price: '30100', open_price: '30100', high_price: '30200', low_price: '29900'

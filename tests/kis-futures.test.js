@@ -128,6 +128,21 @@ test('failed KIS history is an error, never synthetic candles or delayed Yahoo d
   await assert.rejects(invalid.quote(), /월물코드/);
 });
 
+test('KIS history still displays real futures candles when only the quote endpoint returns HTTP 500', async () => {
+  const api = createKisFutures({ contractOverride: 'NQZ26', now: () => at, WebSocketImpl: null,
+    request: async path => {
+      if (path.endsWith('inquire-price')) throw Object.assign(new Error('KIS HHDFC55010000 HTTP 500'), { kisHttpStatus: 500 });
+      return { output1: [row('133500'), row('133600')], output2: { index_key: '' } };
+    } });
+  const result = await api.chart('1m', 40);
+  assert.equal(result.source, 'kis-futures-history');
+  assert.equal(result.marketStatus, 'KIS 봉 시세 (현재가 오류)');
+  assert.equal(result.price, 25000.25);
+  assert.equal(result.previousClose, null);
+  assert.equal(result.changePercent, null);
+  assert.equal(result.series.length, 2);
+});
+
 test('an appkey used by stock5-8 is left alone and retries wait five minutes; websocket paths are not duplicated', async t => {
   let clock = at;
   const api = createKisFutures({ contractOverride: 'NQZ26', now: () => clock, WebSocketImpl: Socket,
