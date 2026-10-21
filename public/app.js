@@ -1,6 +1,7 @@
 import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers } from "./chart-indicators.js";
 import { halfCandleLimit, initialViewLimit, initialViewInterval, initialComparisonChanges, slotPatchForView, viewLimitsFromShared } from "./chart-view-settings.js";
 import { LineBreakPriceBadge } from "./line-break-price-badge.js";
+import { captureViewport, refreshedViewport } from "./chart-viewport.js";
 import { calculateThreeLineBreak } from "./three-line-break.js";
 import { SharedDashboard } from "./shared-dashboard.js";
 import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount, layoutViews, isComparisonLayout, adjacentPage } from "./dashboard-model.js";
@@ -8,7 +9,7 @@ import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
 import { isFuturesSymbol } from "./instrument-catalog.js";
-import { buildCursorGroups, cursorTimeForChart, cursorTimeForLineBreak, visibleLogicalRange } from "./chart-alignment.js";
+import { buildCursorGroups, cursorTimeForChart, cursorTimeForLineBreak } from "./chart-alignment.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -577,22 +578,6 @@ function shouldIgnoreIntradayPayload(state, rows, initial) {
   return false;
 }
 
-function keepLatestVisible(state) {
-  const range = visibleLogicalRange(state.rows.length, state.limit, CHART_RIGHT_OFFSET);
-  if (range) state.instance.chart.timeScale().setVisibleLogicalRange(range);
-}
-
-function isViewAtLatest(state) {
-  try {
-    const range = state.instance.chart.timeScale().getVisibleLogicalRange();
-    if (!range || !state.rows?.length) return true;
-    const lastIndex = state.rows.length - 1 + CHART_RIGHT_OFFSET;
-    return range.to >= lastIndex - 3;
-  } catch {
-    return true;
-  }
-}
-
 function drawMacdBackground(state) {
   const { bgCanvas, rows, macd, instance } = state;
   if (state.disposed || !bgCanvas) return;
@@ -683,6 +668,9 @@ function drawMacdBackground(state) {
 
 function syncIndicatorMode(state) {
   state.instance.candleSeries.applyOptions({ priceLineVisible: !isLineBreak(state), lastValueVisible: !isLineBreak(state) });
+  // The enlarged line-break badge is a DOM layer. Draw its hovered axis price
+  // in a higher DOM layer too, so the current-price badge cannot cover it.
+  state.instance.chart.applyOptions({ crosshair: { horzLine: { labelVisible: !isLineBreak(state) } } });
   state.priceBadge?.updateAllViews();
   state.card.setAttribute('aria-label', `${state.item.name || state.item.symbol} ${isLineBreak(state) ? '삼선전환도' : '캔들차트'}`);
   for (const period of MA_PERIODS) {
@@ -740,6 +728,7 @@ function applyPayload(state, payload, initial = false) {
   const previousRows = state.rows || [];
   const previousLastTime = previousRows.at(-1)?.time;
   if (shouldIgnoreIntradayPayload(state, sourceRows, initial)) return;
+  const viewport = captureViewport(state.instance.chart.timeScale(), previousRows, CHART_RIGHT_OFFSET);
   state.latestSourceRows = sourceRows;
   if (isLineBreak(state)) {
     const historyKey = `${state.item.symbol}:${payload.contract || ''}:${state.interval}:${sessionMode}`;
@@ -813,7 +802,8 @@ function applyPayload(state, payload, initial = false) {
   state.card.querySelector('[data-series="candle"] .candle-label').textContent = isLineBreak(state) ? "삼선" : "캔들";
   state.card.querySelector(".price-tooltip").style.display = "none";
   renderLegend(state, payload);
-  if (initial || isIntraday(state.interval)) keepLatestVisible(state);
+  const range = refreshedViewport(previousRows, rows, viewport, initial, state.limit, CHART_RIGHT_OFFSET);
+  if (range) state.instance.chart.timeScale().setVisibleLogicalRange(range);
   requestAnimationFrame(() => drawMacdBackground(state));
   state.card.classList.add("loaded");
   state.card.classList.toggle("no-line-break", isLineBreak(state) && !rows.length);
@@ -998,11 +988,13 @@ async function createCard(item, index, view = {}, position = index) {
     state.pointerInside = true;
     state.pointerPoint = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     renderPointerCursor(state);
+    state.priceBadge.updateAllViews();
   };
   stage.addEventListener('pointerenter', pointerMove);
   stage.addEventListener('pointermove', pointerMove);
   stage.addEventListener('pointerleave', () => {
     state.pointerInside = false;
+    state.priceBadge.updateAllViews();
     state.card.querySelector('.price-tooltip').style.display = 'none';
     state.instance.chart.clearCrosshairPosition();
     if (hoveredChart?.state === state) { hoveredChart = null; syncVerticalCursor(); }

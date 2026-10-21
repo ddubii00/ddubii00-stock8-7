@@ -739,6 +739,20 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .line-break-price-badge[hidden], .price-reversal[hidden] { display: none; }
+.line-break-hover-price {
+  position: absolute;
+  z-index: 8;
+  transform: translateY(-50%);
+  padding: 2px 6px;
+  background: #4c525e;
+  color: #fff;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.line-break-hover-price[hidden] { display: none; }
 .line-break-price-badge strong {
   display: block;
   box-sizing: border-box;
