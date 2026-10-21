@@ -90,7 +90,12 @@ function isLineBreak(state) {
 
 function updateMacdMarkers(state) {
   const markers = state.macdSignals && !isLineBreak(state) && state.visible.candle ? macdCrossMarkers(state.macd) : [];
-  state.instance.candleSeries.setMarkers(markers);
+  // Native markers stack at the same time/position. An invisible spacer adds
+  // breathing room from the wick while following pan, zoom and price scaling.
+  state.instance.candleSeries.setMarkers(markers.flatMap(marker => [
+    { time: marker.time, position: marker.position, shape: 'circle', color: 'transparent', size: 0.4 },
+    marker
+  ]));
   state.card.dataset.macdSignals = String(markers.length);
 }
 
