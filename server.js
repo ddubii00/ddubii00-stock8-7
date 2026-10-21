@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { createNaverIndexHistory } from "./lib/naver-index-history.js";
 import { staticSearch } from "./public/search-catalog.js";
 import { createProgressiveSearch } from "./lib/progressive-search.js";
 import { createCatalogLoader } from "./lib/search-catalog-cache.js";
@@ -44,6 +45,7 @@ const kisFutures = createKisFutures({ ...futuresClient, fetcher: fetchWithTimeou
 const MAX_QUERY_LIMIT = 700;
 const MAX_LINE_BREAK_HISTORY = 10000;
 const naverMinuteCache = new Map();
+const naverIndexHistory = createNaverIndexHistory({ fetcher: fetchWithTimeout });
 const normalizeUsPriceChange = createUsPriceChange({ fetcher: fetchWithTimeout });
 
 
@@ -912,7 +914,8 @@ function parseNaverMinuteRows(symbol, text) {
 async function fetchNaverMinuteRows(symbol, anchorTimestamp, lookbackDays = 7) {
   const normalized = symbol.trim().toUpperCase();
   if (!isKoreanSymbol(normalized) && !isKoreanIndex(normalized)) return [];
-  const code = isKoreanIndex(normalized) ? naverIndexCode(normalized) : normalized.split(".")[0];
+  if (isKoreanIndex(normalized)) return normalizeKoreanIntradayRows(normalized, await naverIndexHistory(normalized));
+  const code = normalized.split(".")[0];
   const dateKey = koreanDateKeyForTimestamp(anchorTimestamp || Math.floor(Date.now() / 1000));
   const startKey = koreanDateKeyForTimestamp((anchorTimestamp || Math.floor(Date.now() / 1000)) - lookbackDays * 86400);
   const endTime = isKoreanSymbol(normalized) ? "2000" : "1530";

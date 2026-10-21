@@ -51,6 +51,17 @@ test('chart API supplies longer real history for line breaks and never fabricate
   const futureLines=await(await chart('symbol=NQ%3DF&interval=1m&limit=10000&chartType=line-break')).json();
   assert.equal(futureLines.series.length,2000);assert.equal(futureLines.decimals,2);
   assert.equal((await(await fetch(base+'/api/state',{headers})).json()).slots[0].symbol,'NQ=F');
+  // A delayed Yahoo tail must not leave a 20-minute hole in either view's raw data.
+  for (const symbol of ['^KS11','^KQ11']) {
+    const [candles, lineSource] = await Promise.all(['candles','line-break'].map(async type =>
+      (await chart(`symbol=${encodeURIComponent(symbol)}&interval=1m&limit=${type==='candles'?400:10000}&chartType=${type}`)).json()));
+    assert.equal(candles.series.length,400);
+    const tail=candles.series.slice(-21);
+    assert.ok(tail.every(row=>row.source==='naver-index-minute'));
+    assert.ok(tail.slice(1).every((row,index)=>row.time-tail[index].time===60));
+    const rawByTime=new Map(lineSource.series.map(row=>[row.time,row]));
+    for(const row of tail) assert.equal(rawByTime.get(row.time)?.close,row.close);
+  }
   const normal=await(await chart('symbol=AAPL.US&interval=1m&limit=10000')).json();
   assert.equal(normal.series.length,700);
   for (const interval of ['1m','1d','1wk']) {
