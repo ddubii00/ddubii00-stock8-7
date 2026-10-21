@@ -65,7 +65,7 @@ export function macdCrossMarkers(macd) {
       time: macd[index].time, position: 'belowBar', color: '#dc2626', shape: 'arrowUp', size: 1.05
     });
     else if (previous >= 0 && current < 0) markers.push({
-      time: macd[index].time, position: 'aboveBar', color: '#2563eb', shape: 'arrowDown', size: 0.75
+      time: macd[index].time, position: 'aboveBar', color: '#2563eb', shape: 'arrowDown', size: 1.05
     });
   }
   return markers;
