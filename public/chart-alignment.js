@@ -37,6 +37,19 @@ export function cursorTimeForChart(rows, interval, sourceTime, timeZone = 'UTC')
   return minutes && sourceTime < time + Number(minutes[1]) * 60 ? time : null;
 }
 
+// A line-break box represents the interval until the next box forms. Map to
+// the latest box at or before the hovered candle, including an unfinished tail.
+export function cursorTimeForLineBreak(rows, sourceTime) {
+  if (!rows?.length || !Number.isFinite(sourceTime)) return null;
+  let low = 0, high = rows.length - 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (rows[mid].time <= sourceTime) low = mid + 1;
+    else high = mid - 1;
+  }
+  return high < 0 ? null : rows[high].time;
+}
+
 export function visibleLogicalRange(rowCount, requestedCount, rightOffset = 2) {
   if (!rowCount) return null;
   return { from: Math.max(0, rowCount - requestedCount), to: rowCount - 1 + rightOffset };

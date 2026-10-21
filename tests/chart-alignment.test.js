@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCursorGroups, cursorTimeForChart, visibleLogicalRange } from '../public/chart-alignment.js';
+import { buildCursorGroups, cursorTimeForChart, cursorTimeForLineBreak, visibleLogicalRange } from '../public/chart-alignment.js';
 
 const chart = (slotIndex, times, extra = {}) => ({ slotIndex, interval: '1m', limit: 400, rows: times.map(time => ({ time, open: 100, high: 101, low: 99, close: 100 })), ...extra });
 
@@ -82,4 +82,19 @@ test('intraday cursors select the corresponding daily, weekly and monthly tradin
   const usOpen = Date.parse('2026-10-20T13:30:00Z') / 1000;
   const usPremarket = Date.parse('2026-10-20T12:00:00Z') / 1000;
   assert.equal(cursorTimeForChart([{time: usOpen}], '1d', usPremarket, 'America/New_York'), usOpen);
+});
+
+test('paired line-break cursor uses the box active at the candle time, including the latest unfinished interval', () => {
+  const time = value => Date.parse(`2026-10-21T${value}:00+09:00`) / 1000;
+  const rows = ['09:00', '09:50', '10:10'].map(value => ({ time: time(value) }));
+  const original = structuredClone(rows);
+  assert.equal(cursorTimeForLineBreak(rows.slice(0, 2), time('10:03')), time('09:50'));
+  assert.equal(cursorTimeForLineBreak(rows, time('10:03')), time('09:50'));
+  assert.equal(cursorTimeForLineBreak(rows, time('10:09')), time('09:50')); // No jump to a future box.
+  assert.equal(cursorTimeForLineBreak(rows, time('10:10')), time('10:10'));
+  assert.equal(cursorTimeForLineBreak(rows, time('09:50')), time('09:50'));
+  assert.equal(cursorTimeForLineBreak(rows, time('08:59')), null);
+  assert.equal(cursorTimeForLineBreak([], time('10:03')), null);
+  assert.equal(cursorTimeForLineBreak(rows, NaN), null);
+  assert.deepEqual(rows, original);
 });

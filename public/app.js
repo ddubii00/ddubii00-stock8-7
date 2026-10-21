@@ -6,7 +6,7 @@ import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
 import { isFuturesSymbol } from "./instrument-catalog.js";
-import { buildCursorGroups, cursorTimeForChart, visibleLogicalRange } from "./chart-alignment.js";
+import { buildCursorGroups, cursorTimeForChart, cursorTimeForLineBreak, visibleLogicalRange } from "./chart-alignment.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -76,6 +76,7 @@ let marketRefreshInFlight = false;
 let chartRefreshInFlight = false;
 let sessionMode = "KRX";
 let showBollinger = true;
+let pairedBollinger = false;
 let globalWeekly = false;
 let showLineBreak = false;
 let chartFitFrame = 0;
@@ -86,6 +87,10 @@ let hoveredChart = null;
 
 function isLineBreak(state) {
   return state.chartType ? state.chartType === 'line-break' : showLineBreak;
+}
+
+function bollingerEnabled() {
+  return LAYOUTS[layoutIndex] === '4x4' ? pairedBollinger : showBollinger;
 }
 
 function updateMacdMarkers(state) {
@@ -101,9 +106,14 @@ function updateMacdMarkers(state) {
 
 function syncVerticalCursor() {
   for (const state of chartState.values()) {
-    const sameGroup = !isLineBreak(state) && hoveredChart && state !== hoveredChart.state && state.alignment && state.alignment === hoveredChart.state.alignment;
+    const source = hoveredChart?.state;
+    const pairedLineBreak = LAYOUTS[layoutIndex] === '4x4' && isLineBreak(state) && source?.slotIndex === state.slotIndex;
+    const sameGroup = source && !isLineBreak(source) && (!isLineBreak(state) || pairedLineBreak)
+      && state !== source && state.alignment && state.alignment === source.alignment;
     const timeZone = isKoreanSymbol(state.item.symbol) || isKoreanIndex(state.item.symbol) ? 'Asia/Seoul' : 'America/New_York';
-    const targetTime = sameGroup ? cursorTimeForChart(state.rows, state.interval, hoveredChart.time, timeZone) : null;
+    const targetTime = !sameGroup ? null : pairedLineBreak
+      ? cursorTimeForLineBreak(state.rows, hoveredChart.time)
+      : cursorTimeForChart(state.rows, state.interval, hoveredChart.time, timeZone);
     const x = targetTime != null ? state.instance.chart.timeScale().timeToCoordinate(targetTime) : null;
     const visible = Number.isFinite(x) && x >= 0 && x <= state.instance.chart.timeScale().width();
     state.syncCursor.hidden = !visible;
@@ -123,7 +133,7 @@ function scheduleTimeAlignment() {
     const states = [...chartState.values()].filter(state => !state.disposed);
     const ready = states.filter(state => state.rows.length && state.lastPayloadKey === chartRequestKey(state));
     // Share only the cursor timestamp. Every chart owns its data and viewport.
-    const groups = buildCursorGroups(ready.filter(state => !isLineBreak(state)), LAYOUTS[layoutIndex]);
+    const groups = buildCursorGroups(ready.filter(state => LAYOUTS[layoutIndex] === '4x4' || !isLineBreak(state)), LAYOUTS[layoutIndex]);
     for (const state of states) state.alignment = null;
     for (const group of groups) for (const state of group.members) state.alignment = group;
     syncVerticalCursor();
@@ -966,7 +976,7 @@ async function createCard(item, index, view = {}, position = index) {
       ma60: true,
       ma120: true,
       ma200: true,
-      bb: showBollinger
+      bb: bollingerEnabled()
     }
   };
   state.instance = createLwChart(stage, state);
@@ -1000,6 +1010,7 @@ async function createCard(item, index, view = {}, position = index) {
   chartState.set(id, state);
   card.querySelectorAll(".ma-legend button[data-series]").forEach((button) => {
     button.setAttribute("aria-pressed", String(state.visible[button.dataset.series]));
+    button.classList.toggle("off", !state.visible[button.dataset.series]);
     const period = Number(button.dataset.series.replace("ma", ""));
     if (MA_COLORS[period]) {
       button.style.color = MA_COLORS[period];
@@ -1081,19 +1092,22 @@ document.querySelectorAll(".chart-toggle").forEach((button) => {
   button.addEventListener("click", async () => {
     const feature = button.dataset.feature;
     if (feature === 'line-break' && LAYOUTS[layoutIndex] === '4x4') return;
-    if (feature === "bb") showBollinger = !showBollinger;
+    if (feature === "bb") {
+      if (LAYOUTS[layoutIndex] === '4x4') pairedBollinger = !pairedBollinger;
+      else showBollinger = !showBollinger;
+    }
     if (feature === "weekly") globalWeekly = !globalWeekly;
     if (feature === "line-break") showLineBreak = !showLineBreak;
     if (feature === "line-break") syncVerticalCursor();
-    const enabled = feature === "bb" ? showBollinger : feature === "weekly" ? globalWeekly : showLineBreak;
+    const enabled = feature === "bb" ? bollingerEnabled() : feature === "weekly" ? globalWeekly : showLineBreak;
     button.classList.toggle("active", enabled);
     button.setAttribute("aria-pressed", String(enabled));
     await Promise.all([...chartState.values()].map(async (state) => {
       if (feature === "bb") {
-        state.visible.bb = showBollinger;
+        state.visible.bb = bollingerEnabled();
         const local = state.card.querySelector('[data-series="bb"]');
-        local.classList.toggle("off", !showBollinger);
-        local.setAttribute("aria-pressed", String(showBollinger));
+        local.classList.toggle("off", !state.visible.bb);
+        local.setAttribute("aria-pressed", String(state.visible.bb));
         updateBollinger(state);
       } else if (feature === "weekly") {
         state.weeklyLocal = false;
@@ -1129,6 +1143,9 @@ document.querySelector("#layoutButton").addEventListener("click", () => {
   layoutIndex = (layoutIndex + 1) % LAYOUTS.length;
   chartGrid.dataset.layout = LAYOUTS[layoutIndex];
   const paired = LAYOUTS[layoutIndex] === '4x4';
+  const bbButton = document.querySelector('.header-actions [data-feature="bb"]');
+  bbButton.classList.toggle('active', bollingerEnabled());
+  bbButton.setAttribute('aria-pressed', String(bollingerEnabled()));
   const lineBreakButton = document.querySelector('[data-feature="line-break"]');
   lineBreakButton.disabled = paired;
   lineBreakButton.classList.toggle('active', !paired && showLineBreak);
