@@ -23,10 +23,10 @@ const TIMEFRAMES = [
 ];
 
 const MARKET_ITEMS = [
-  { label: "달러/원", symbol: "KRW=X", decimals: 0 },
   { label: "KOSPI", symbol: "^KS11", decimals: 0 },
   { label: "KOSDAQ", symbol: "^KQ11", decimals: 0 },
-  { label: "나스닥", symbol: "^IXIC", decimals: 0 }
+  { label: "나스닥", symbol: "^IXIC", decimals: 0 },
+  { label: "달러/원", symbol: "KRW=X", decimals: 0 }
 ];
 
 const DEFAULT_LIMIT = 120;

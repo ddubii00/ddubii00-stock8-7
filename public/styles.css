@@ -59,9 +59,9 @@ body {
   max-width: 100%;
   align-items: center;
   justify-content: space-between;
-  gap: 3px 6px;
+  gap: 3px 4px;
   min-height: 32px;
-  padding: 4px 12px;
+  padding: 4px 8px;
   border-bottom: 1px solid var(--border);
   background: #fff;
   box-shadow: var(--shadow);
@@ -70,13 +70,13 @@ body {
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   flex: 0 0 auto;
   margin-left: auto;
   flex-wrap: nowrap;
   min-width: 0;
   max-width: 100%;
-  height: 28px;
+  height: 26px;
   overflow: visible;
   white-space: nowrap;
 }
@@ -166,7 +166,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 2px;
+  gap: 1px;
   flex: 0 1 auto;
   max-width: 100%;
   flex-wrap: nowrap;
@@ -189,8 +189,8 @@ body {
 .feature-toggle {
   display: inline-flex;
   flex-shrink: 0;
-  gap: 2px;
-  padding: 2px;
+  gap: 1px;
+  padding: 1px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: #f7f9fc;
@@ -199,8 +199,8 @@ body {
 .session-button,
 .chart-toggle {
   height: 22px;
-  min-width: 34px;
-  padding: 0 6px;
+  min-width: 30px;
+  padding: 0 4px;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -218,8 +218,8 @@ body {
 }
 
 .market-item {
-  --market-price-width: 47px;
-  --market-delta-width: 30px;
+  --market-price-width: 40px;
+  --market-delta-width: 26px;
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -233,17 +233,17 @@ body {
 }
 
 .market-item[data-symbol="KRW=X"] {
-  --market-price-width: 43px;
-  --market-delta-width: 24px;
+  --market-price-width: 38px;
+  --market-delta-width: 16px;
 }
 
 .market-item[data-symbol="^KQ11"] {
-  --market-price-width: 40px;
+  --market-price-width: 29px;
 }
 
 .market-item[data-symbol="^IXIC"] {
-  --market-price-width: 58px;
-  --market-delta-width: 40px;
+  --market-price-width: 47px;
+  --market-delta-width: 32px;
 }
 
 .market-label {
@@ -259,7 +259,7 @@ body {
 
 .market-item + .market-item::before {
   display: inline-block;
-  margin: 0 1px 0 0;
+  margin: 0;
   color: #111827;
   content: "|";
 }
@@ -288,8 +288,8 @@ body {
 
 .market-change {
   display: inline-block;
-  flex: 0 0 55px;
-  width: 55px;
+  flex: 0 0 49px;
+  width: 49px;
   margin-left: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -304,7 +304,7 @@ body {
 
 .market-session {
   display: inline-flex;
-  flex: 0 0 30px;
+  flex: 0 0 28px;
   align-items: center;
   justify-content: center;
   height: 16px;
@@ -629,9 +629,9 @@ body {
 .login-card input { width: 100%; height: 42px; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 5px; font: inherit; }
 .login-card button { width: 100%; padding: 10px; border: 0; border-radius: 5px; background: var(--accent); color: white; cursor: pointer; font: inherit; }
 .login-card #loginError { margin-top: 12px; margin-bottom: 0; color: #dc2626; }
-.navigation-controls { display: flex; flex-shrink: 0; align-items: center; gap: 3px; white-space: nowrap; }
-.navigation-controls button { height: 22px; padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; background: #fff; color: var(--text); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
-#pageIndicator { padding: 0 3px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.navigation-controls { display: flex; flex-shrink: 0; align-items: center; gap: 2px; white-space: nowrap; }
+.navigation-controls button { height: 22px; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; background: #fff; color: var(--text); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+#pageIndicator { padding: 0 2px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .save-status { font-size: 10px; white-space: nowrap; color: var(--muted); }
 .save-status[data-status="error"] { color: #dc2626; }
 .ma-legend { flex-wrap: wrap; }
@@ -742,13 +742,13 @@ body {
 .line-break-price-badge strong {
   display: block;
   box-sizing: border-box;
-  min-width: 48px;
-  padding: 3px 5px;
+  min-width: 52px;
+  padding: 4px 6px;
   background: var(--badge-color);
   color: #fff;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 750;
-  line-height: 16px;
+  line-height: 18px;
   white-space: nowrap;
 }
 .price-reversal {
