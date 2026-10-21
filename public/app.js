@@ -1,4 +1,5 @@
 import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers } from "./chart-indicators.js";
+import { LineBreakPriceBadge } from "./line-break-price-badge.js";
 import { calculateThreeLineBreak } from "./three-line-break.js";
 import { SharedDashboard } from "./shared-dashboard.js";
 import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount, layoutViews, isComparisonLayout, adjacentPage } from "./dashboard-model.js";
@@ -79,6 +80,7 @@ let showBollinger = true;
 const comparisonBollinger = new Map();
 let globalWeekly = false;
 let showLineBreak = false;
+let showMacdSignals = true;
 let chartFitFrame = 0;
 let priceScaleFitFrame = 0;
 let priceScaleWidth = PRICE_SCALE_WIDTH;
@@ -94,7 +96,7 @@ function bollingerEnabled() {
 }
 
 function updateMacdMarkers(state) {
-  const markers = state.macdSignals && !isLineBreak(state) && state.visible.candle ? macdCrossMarkers(state.macd) : [];
+  const markers = showMacdSignals && state.macdSignals && !isLineBreak(state) && state.visible.candle ? macdCrossMarkers(state.macd) : [];
   // Native markers stack at the same time/position. An invisible spacer adds
   // breathing room from the wick while following pan, zoom and price scaling.
   state.instance.candleSeries.setMarkers(markers.flatMap(marker => [
@@ -280,6 +282,7 @@ function disposeCard(state) {
   state.disposed = true;
   state.requestId = (state.requestId || 0) + 1;
   state.trendEditor?.destroy();
+  state.priceBadge?.destroy();
   state.instance.observer.disconnect();
   state.instance.chart.remove();
   chartState.delete(state.card.dataset.cardId);
@@ -408,7 +411,7 @@ function createLwChart(container, state) {
     borderDownColor: "#1f5bd8",
     wickUpColor: "#d92c2c",
     wickDownColor: "#1f5bd8",
-    lastValueVisible: true,
+    lastValueVisible: !isLineBreak(state),
     priceLineVisible: !isLineBreak(state),
     // An empty override uses the last plotted bar's red/blue color for its
     // price label, including live candle changes and line-break reversals.
@@ -680,7 +683,8 @@ function drawMacdBackground(state) {
 }
 
 function syncIndicatorMode(state) {
-  state.instance.candleSeries.applyOptions({ priceLineVisible: !isLineBreak(state) });
+  state.instance.candleSeries.applyOptions({ priceLineVisible: !isLineBreak(state), lastValueVisible: !isLineBreak(state) });
+  state.priceBadge?.updateAllViews();
   state.card.setAttribute('aria-label', `${state.item.name || state.item.symbol} ${isLineBreak(state) ? '삼선전환도' : '캔들차트'}`);
   for (const period of MA_PERIODS) {
     state.instance.maSeries[period].applyOptions({ visible: !isLineBreak(state) && state.visible[`ma${period}`] });
@@ -975,6 +979,7 @@ async function createCard(item, index, view = {}, position = index) {
     }
   };
   state.instance = createLwChart(stage, state);
+  state.priceBadge = new LineBreakPriceBadge(state, () => isLineBreak(state), price => formatAxisPrice(price, state.item.symbol));
   syncIndicatorMode(state);
   state.syncCursor = document.createElement('div');
   state.syncCursor.className = 'synced-crosshair';
@@ -1082,6 +1087,13 @@ async function refreshAll(initial = false) {
     chartRefreshInFlight = false;
   }
 }
+
+document.querySelector('#signalsButton').addEventListener('click', event => {
+  showMacdSignals = !showMacdSignals;
+  event.currentTarget.classList.toggle('active', showMacdSignals);
+  event.currentTarget.setAttribute('aria-pressed', String(showMacdSignals));
+  for (const state of chartState.values()) updateMacdMarkers(state);
+});
 
 document.querySelectorAll(".chart-toggle").forEach((button) => {
   button.addEventListener("click", async () => {

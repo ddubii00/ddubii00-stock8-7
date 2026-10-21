@@ -729,3 +729,38 @@ body {
 .chart-card.loaded.no-line-break .loading { display: block; }
 
 .header-actions .chart-toggle:disabled { opacity: .4; cursor: default; }
+
+.line-break-price-badge {
+  position: absolute;
+  z-index: 7;
+  transform: translateY(-50%);
+  text-align: center;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.line-break-price-badge[hidden], .price-reversal[hidden] { display: none; }
+.line-break-price-badge strong {
+  display: block;
+  box-sizing: border-box;
+  min-width: 48px;
+  padding: 3px 5px;
+  background: var(--badge-color);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.price-reversal {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 0;
+  width: 100%;
+  color: var(--badge-color);
+  background: rgba(255,255,255,.95);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 16px;
+}
+
+.navigation-controls #signalsButton.active { background: var(--accent); border-color: var(--accent); color: #fff; }
