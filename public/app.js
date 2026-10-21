@@ -1,4 +1,5 @@
 import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers } from "./chart-indicators.js";
+import { halfCandleLimit, initialViewLimit, initialComparisonChanges, slotPatchForView, viewLimitsFromShared } from "./chart-view-settings.js";
 import { LineBreakPriceBadge } from "./line-break-price-badge.js";
 import { calculateThreeLineBreak } from "./three-line-break.js";
 import { SharedDashboard } from "./shared-dashboard.js";
@@ -244,7 +245,7 @@ function showSaveStatus(status, message = "") {
 }
 
 function persistSlot(state, patch) {
-  shared.change([{ type: "slot", index: state.slotIndex, patch }]);
+  shared.change([{ type: "slot", index: state.slotIndex, patch: slotPatchForView(state, patch) }]);
 }
 
 function applySharedState(value) {
@@ -256,12 +257,12 @@ function applySharedState(value) {
     if (state.disposed) continue;
     const slot = value.slots[state.slotIndex];
     const interval = globalWeekly && !state.weeklyLocal ? "1wk" : slot.interval;
-    const limit = globalWeekly && !state.weeklyLocal ? state.limit : slot.limit;
+    const { limit, restoreLimit } = viewLimitsFromShared(state, slot, globalWeekly && !state.weeklyLocal);
     const changed = state.item.symbol !== slot.symbol || state.interval !== interval || state.limit !== limit;
     const symbolChanged = state.item.symbol !== slot.symbol;
     state.item = { symbol: slot.symbol, name: slot.name, decimals: slot.decimals };
     state.restoreInterval = slot.interval;
-    state.restoreLimit = slot.limit;
+    state.restoreLimit = restoreLimit;
     state.interval = interval;
     state.limit = limit;
     if (changed) {
@@ -294,7 +295,10 @@ async function renderPage() {
   chartGrid.replaceChildren();
   document.querySelector("#pageIndicator").textContent = `${activePage + 1} / ${PAGE_COUNT}`;
   const start = activePage * SLOTS_PER_PAGE;
-  await Promise.all(layoutViews(LAYOUTS[layoutIndex]).map((view, position) =>
+  const views = layoutViews(LAYOUTS[layoutIndex]);
+  const defaults = initialComparisonChanges(sharedState.slots, start, views, globalWeekly ? defaultLimitForInterval('1wk') : undefined);
+  if (defaults.length) shared.change(defaults);
+  await Promise.all(views.map((view, position) =>
     createCard(sharedState.slots[start + view.slot], start + view.slot, view, position)));
   fitChartsToSlots();
 }
@@ -316,10 +320,6 @@ function formatAxisPrice(value, symbol) {
 
 function isIntraday(interval) {
   return !["1d", "1wk", "1mo"].includes(interval);
-}
-
-function minimumLimitForInterval(interval) {
-  return 20;
 }
 
 function defaultLimitForInterval(interval) {
@@ -901,7 +901,7 @@ function renderTimeframeButtons(card, state) {
       button.textContent = timeframe.label;
       button.addEventListener("click", async () => {
         state.interval = timeframe.value;
-        state.limit = defaultLimitForInterval(state.interval);
+        state.limit = state.chartType === "line-break" ? halfCandleLimit(defaultLimitForInterval(state.interval)) : defaultLimitForInterval(state.interval);
         if (globalWeekly) {
           state.restoreInterval = state.interval;
           state.restoreLimit = state.limit;
@@ -920,9 +920,10 @@ function renderTimeframeButtons(card, state) {
 
 function bindPeriod(card, state) {
   const input = card.querySelector(".period-input");
+  input.min = state.chartType === "line-break" ? "1" : "20";
   input.value = String(state.limit);
   const apply = async () => {
-    const next = Math.min(MAX_LIMIT, Math.max(minimumLimitForInterval(state.interval), Math.trunc(Number(input.value || DEFAULT_LIMIT))));
+    const next = Math.min(MAX_LIMIT, Math.max(Number(input.min), Math.trunc(Number(input.value || DEFAULT_LIMIT))));
     input.value = String(next);
     state.limit = next;
     if (globalWeekly && state.restoreInterval === state.interval) state.restoreLimit = next;
@@ -959,9 +960,10 @@ async function createCard(item, index, view = {}, position = index) {
     macdSignals: Boolean(view.macdSignals),
     interval: globalWeekly ? "1wk" : item.interval,
     restoreInterval: item.interval,
-    restoreLimit: item.limit,
+    restoreLimit: initialViewLimit(item, view.chartType),
+    savedLineBreakLimit: item.lineBreakLimit ?? null,
     weeklyLocal: false,
-    limit: globalWeekly ? defaultLimitForInterval("1wk") : item.limit,
+    limit: initialViewLimit(item, view.chartType, globalWeekly ? defaultLimitForInterval("1wk") : item.limit),
     sourceRows: [],
     rows: [],
     macd: [],
@@ -1118,7 +1120,7 @@ document.querySelectorAll(".chart-toggle").forEach((button) => {
         state.weeklyLocal = false;
         state.trendEditor?.reset();
         setWeekly(state, globalWeekly);
-        if (globalWeekly) state.limit = defaultLimitForInterval("1wk");
+        if (globalWeekly) state.limit = state.chartType === "line-break" ? halfCandleLimit(defaultLimitForInterval("1wk")) : defaultLimitForInterval("1wk");
         state.card.querySelector(".period-input").value = String(state.limit);
         renderTimeframeButtons(state.card, state);
         await refreshCard(state, true);

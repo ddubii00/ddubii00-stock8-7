@@ -64,6 +64,7 @@ export function cleanSlotPatch(patch) {
   if ('decimals' in patch) { if (![0, 2].includes(patch.decimals)) invalid(); result.decimals = patch.decimals; }
   if ('interval' in patch) { if (!INTERVALS.includes(patch.interval)) invalid(); result.interval = patch.interval; }
   if ('limit' in patch) { if (!Number.isInteger(patch.limit) || patch.limit < 20 || patch.limit > 700) invalid(); result.limit = patch.limit; }
+  if ('lineBreakLimit' in patch) { if (!Number.isInteger(patch.lineBreakLimit) || patch.lineBreakLimit < 1 || patch.lineBreakLimit > 700) invalid(); result.lineBreakLimit = patch.lineBreakLimit; }
   if (!Object.keys(result).length) invalid();
   return result;
 }
