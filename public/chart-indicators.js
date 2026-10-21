@@ -39,3 +39,34 @@ export function setWeekly(state, enabled) {
     state.limit = state.restoreLimit;
   }
 }
+
+function ema(values, period) {
+  const factor = 2 / (period + 1);
+  let value = values[0];
+  return values.map(next => (value = value == null ? next : next * factor + value * (1 - factor)));
+}
+
+// MACD(12, 26), with its 9-period EMA signal. Preserve all warmup bars.
+export function calcMacd(rows) {
+  const closes = rows.map(row => row.close);
+  const fast = ema(closes, 12), slow = ema(closes, 26);
+  const values = fast.map((value, index) => value - slow[index]);
+  const signals = ema(values, 9);
+  return rows.map((row, index) => ({ time: row.time, value: values[index], signal: signals[index] }));
+}
+
+export function macdCrossMarkers(macd) {
+  const markers = [];
+  // Wait for the slow EMA and signal warmup; equality alone is not a cross.
+  for (let index = 33; index < macd.length; index++) {
+    const previous = macd[index - 1].value - macd[index - 1].signal;
+    const current = macd[index].value - macd[index].signal;
+    if (previous <= 0 && current > 0) markers.push({
+      time: macd[index].time, position: 'belowBar', color: '#dc2626', shape: 'arrowUp', size: 0.6
+    });
+    else if (previous >= 0 && current < 0) markers.push({
+      time: macd[index].time, position: 'aboveBar', color: '#2563eb', shape: 'arrowDown', size: 0.6
+    });
+  }
+  return markers;
+}

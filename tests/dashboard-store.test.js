@@ -4,13 +4,13 @@ import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDashboardStore } from '../lib/dashboard-store.js';
-import { createDashboard, applyChanges, LAYOUTS, adjacentPage } from '../public/dashboard-model.js';
+import { createDashboard, applyChanges, LAYOUTS, adjacentPage, layoutViews, layoutChartCount } from '../public/dashboard-model.js';
 const line = (id) => ({id,start:{time:1700000000,price:100},end:{time:1700086400,price:120},width:1});
 
 test('ten independent pages default to four charts and the exact layout cycle', () => {
   const state = createDashboard();
   assert.equal(state.slots.length, 40);
-  assert.deepEqual(LAYOUTS, ['2x2','1x3','3x1','1x1','2x1','1x2']);
+  assert.deepEqual(LAYOUTS, ['2x2','1x3','3x1','1x1','2x1','1x2','4x4']);
   const next = applyChanges(state,[{type:'slot',index:4,patch:{symbol:'000660.KS',name:'SK하이닉스'}}]);
   assert.equal(next.slots[0].symbol, next.slots[4].symbol);
   assert.equal(state.slots[4].symbol,'NVDA.US');
@@ -92,4 +92,23 @@ test('five-page storage expands atomically without losing slots, shared lines or
   const reopened = await createDashboardStore(directory);
   assert.deepEqual(reopened.get(), store.get());
   assert.deepEqual(reopened.get().lines[reopened.get().slots[39].symbol], state.lines['AAPL.US']);
+});
+
+test('paired layout shows only the first two saved slots on every page, with fixed modes', () => {
+  const dashboard = createDashboard();
+  const views = layoutViews('4x4');
+  assert.equal(layoutChartCount('4x4'), 4);
+  assert.deepEqual(views.map(view => [view.slot, view.chartType, view.macdSignals]), [
+    [0, 'candles', true], [0, 'line-break', false], [1, 'candles', true], [1, 'line-break', false]
+  ]);
+  for (let page = 0; page < 10; page++) {
+    const items = views.map(view => dashboard.slots[page * 4 + view.slot]);
+    assert.equal(items[0], items[1]);
+    assert.equal(items[2], items[3]);
+    assert.equal(items[2], dashboard.slots[page * 4 + 1]);
+  }
+  for (const layout of LAYOUTS.filter(layout => layout !== '4x4')) {
+    assert.deepEqual(layoutViews(layout).map(view => view.slot), Array.from({ length: layoutChartCount(layout) }, (_, index) => index));
+    assert.ok(layoutViews(layout).every(view => view.chartType === null && !view.macdSignals));
+  }
 });

@@ -654,7 +654,8 @@ body {
 .chart-card:focus { outline: none; }
 .load-retry { margin: auto; padding: 18px; border: 1px solid var(--border); border-radius: 6px; background: white; cursor: pointer; }
 /* Layout numbers mean columns × rows; every chart fits the viewport. */
-.chart-grid[data-layout="2x2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); grid-auto-flow: column; }
+.chart-grid[data-layout="2x2"],
+.chart-grid[data-layout="4x4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); grid-auto-flow: column; }
 .chart-grid[data-layout="1x3"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(3, minmax(0, 1fr)); }
 .chart-grid[data-layout="3x1"] { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); }
 .chart-grid[data-layout="1x1"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
@@ -734,3 +735,5 @@ body {
 #instrumentsDialog button:disabled { opacity: .5; cursor: default; }
 @media (max-width: 560px) { #instrumentPages { grid-template-columns: minmax(0, 1fr); } }
 .chart-card.loaded.no-line-break .loading { display: block; }
+
+.header-actions .chart-toggle:disabled { opacity: .4; cursor: default; }

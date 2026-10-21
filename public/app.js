@@ -1,7 +1,7 @@
-import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly } from "./chart-indicators.js";
+import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers } from "./chart-indicators.js";
 import { calculateThreeLineBreak } from "./three-line-break.js";
 import { SharedDashboard } from "./shared-dashboard.js";
-import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount, adjacentPage } from "./dashboard-model.js";
+import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount, layoutViews, adjacentPage } from "./dashboard-model.js";
 import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
@@ -84,9 +84,19 @@ let priceScaleWidth = PRICE_SCALE_WIDTH;
 let alignmentFrame = 0;
 let hoveredChart = null;
 
+function isLineBreak(state) {
+  return state.chartType ? state.chartType === 'line-break' : showLineBreak;
+}
+
+function updateMacdMarkers(state) {
+  const markers = state.macdSignals && !isLineBreak(state) && state.visible.candle ? macdCrossMarkers(state.macd) : [];
+  state.instance.candleSeries.setMarkers(markers);
+  state.card.dataset.macdSignals = String(markers.length);
+}
+
 function syncVerticalCursor() {
   for (const state of chartState.values()) {
-    const sameGroup = !showLineBreak && hoveredChart && state !== hoveredChart.state && state.alignment && state.alignment === hoveredChart.state.alignment;
+    const sameGroup = !isLineBreak(state) && hoveredChart && state !== hoveredChart.state && state.alignment && state.alignment === hoveredChart.state.alignment;
     const timeZone = isKoreanSymbol(state.item.symbol) || isKoreanIndex(state.item.symbol) ? 'Asia/Seoul' : 'America/New_York';
     const targetTime = sameGroup ? cursorTimeForChart(state.rows, state.interval, hoveredChart.time, timeZone) : null;
     const x = targetTime != null ? state.instance.chart.timeScale().timeToCoordinate(targetTime) : null;
@@ -108,7 +118,7 @@ function scheduleTimeAlignment() {
     const states = [...chartState.values()].filter(state => !state.disposed);
     const ready = states.filter(state => state.rows.length && state.lastPayloadKey === chartRequestKey(state));
     // Share only the cursor timestamp. Every chart owns its data and viewport.
-    const groups = showLineBreak ? [] : buildCursorGroups(ready, LAYOUTS[layoutIndex]);
+    const groups = buildCursorGroups(ready.filter(state => !isLineBreak(state)), LAYOUTS[layoutIndex]);
     for (const state of states) state.alignment = null;
     for (const group of groups) for (const state of group.members) state.alignment = group;
     syncVerticalCursor();
@@ -268,8 +278,8 @@ async function renderPage() {
   chartGrid.replaceChildren();
   document.querySelector("#pageIndicator").textContent = `${activePage + 1} / ${PAGE_COUNT}`;
   const start = activePage * SLOTS_PER_PAGE;
-  const count = layoutChartCount(LAYOUTS[layoutIndex]);
-  await Promise.all(sharedState.slots.slice(start, start + count).map((slot, index) => createCard(slot, start + index)));
+  await Promise.all(layoutViews(LAYOUTS[layoutIndex]).map((view, position) =>
+    createCard(sharedState.slots[start + view.slot], start + view.slot, view, position)));
   fitChartsToSlots();
 }
 
@@ -320,33 +330,12 @@ function calcVisibleSma(state, period) {
 }
 
 function updateBollinger(state) {
-  const visible = !showLineBreak && state.visible.bb;
+  const visible = !isLineBreak(state) && state.visible.bb;
   const bands = visible ? calcBollinger(state.rows || []) : [];
   for (const key of ["upper", "middle", "lower"]) {
     state.instance.bbSeries[key].applyOptions({ visible });
     state.instance.bbSeries[key].setData(bands.map((row) => ({ time: row.time, value: row[key] })));
   }
-}
-
-function ema(values, period) {
-  const out = [];
-  const k = 2 / (period + 1);
-  let current = values[0];
-  for (const value of values) {
-    current = current == null ? value : value * k + current * (1 - k);
-    out.push(current);
-  }
-  return out;
-}
-
-function calcMacd(rows) {
-  const closes = rows.map((row) => row.close);
-  const ema12 = ema(closes, 12);
-  const ema26 = ema(closes, 26);
-  return rows.map((row, index) => ({
-    time: row.time,
-    value: ema12[index] - ema26[index]
-  }));
 }
 
 function createLwChart(container, state) {
@@ -501,9 +490,9 @@ function previousRegularCloseForRow(state, row) {
 }
 
 function tooltipValues(state, row) {
-  const open = showLineBreak || isIntraday(state.interval) ? row.open : regularOpenForRow(state, row);
+  const open = isLineBreak(state) || isIntraday(state.interval) ? row.open : regularOpenForRow(state, row);
   const close = row.close;
-  const base = showLineBreak || isIntraday(state.interval) ? open : previousRegularCloseForRow(state, row);
+  const base = isLineBreak(state) || isIntraday(state.interval) ? open : previousRegularCloseForRow(state, row);
   const changePct = Number.isFinite(base) && base !== 0
     ? ((close - base) / base) * 100
     : NaN;
@@ -607,7 +596,7 @@ function drawMacdBackground(state) {
 
   const ctx = bgCanvas.getContext("2d");
   ctx.clearRect(0, 0, width, height);
-  if (showLineBreak || !rows?.length || !macd?.length) return;
+  if (isLineBreak(state) || !rows?.length || !macd?.length) return;
 
   const timeScale = instance.chart.timeScale();
   const points = rows
@@ -682,9 +671,10 @@ function drawMacdBackground(state) {
 }
 
 function syncIndicatorMode(state) {
+  state.card.setAttribute('aria-label', `${state.item.name || state.item.symbol} ${isLineBreak(state) ? '삼선전환도' : '캔들차트'}`);
   for (const period of MA_PERIODS) {
-    state.instance.maSeries[period].applyOptions({ visible: !showLineBreak && state.visible[`ma${period}`] });
-    if (showLineBreak) state.instance.maSeries[period].setData([]);
+    state.instance.maSeries[period].applyOptions({ visible: !isLineBreak(state) && state.visible[`ma${period}`] });
+    if (isLineBreak(state)) state.instance.maSeries[period].setData([]);
   }
   updateBollinger(state);
 }
@@ -694,9 +684,10 @@ function updateSeriesVisibility(state) {
   const { instance, visible } = state;
   instance.candleSeries.setData(visible.candle ? state.rows : []);
   for (const period of MA_PERIODS) {
-    instance.maSeries[period].setData(!showLineBreak && visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
+    instance.maSeries[period].setData(!isLineBreak(state) && visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
   }
   updateBollinger(state);
+  updateMacdMarkers(state);
 }
 
 function renderLegend(state, payload) {
@@ -732,18 +723,18 @@ function applyPayload(state, payload, initial = false) {
   }
   let sourceRows = payload.series || [];
   if (!sourceRows.length) throw new Error("시세 데이터가 없습니다.");
-  if (showLineBreak && /^fallback/.test(payload.source || "")) throw new Error("실제 시세 데이터를 받지 못했습니다.");
+  if (isLineBreak(state) && /^fallback/.test(payload.source || "")) throw new Error("실제 시세 데이터를 받지 못했습니다.");
   const previousRows = state.rows || [];
   const previousLastTime = previousRows.at(-1)?.time;
   if (shouldIgnoreIntradayPayload(state, sourceRows, initial)) return;
   state.latestSourceRows = sourceRows;
-  if (showLineBreak) {
+  if (isLineBreak(state)) {
     const historyKey = `${state.item.symbol}:${payload.contract || ''}:${state.interval}:${sessionMode}`;
     sourceRows = mergeCandleHistory(candleHistories.get(historyKey) || [], sourceRows);
     if (!candleHistories.has(historyKey) && candleHistories.size >= 60) candleHistories.delete(candleHistories.keys().next().value);
     candleHistories.set(historyKey, sourceRows);
   }
-  const rows = showLineBreak ? calculateThreeLineBreak(sourceRows, priceDecimalsForSymbol(state.item.symbol)) : sourceRows;
+  const rows = isLineBreak(state) ? calculateThreeLineBreak(sourceRows, priceDecimalsForSymbol(state.item.symbol)) : sourceRows;
   const latest = rows.at(-1);
   state.lastPayload = payload;
   state.lastPayloadKey = chartRequestKey(state);
@@ -751,12 +742,12 @@ function applyPayload(state, payload, initial = false) {
   state.sourceRows = sourceRows;
   state.rows = rows;
   state.timeline = rows;
-  state.macd = showLineBreak ? [] : calcMacd(rows);
+  state.macd = isLineBreak(state) ? [] : calcMacd(rows);
   state.previousClose = Number(payload.previousClose);
   syncIndicatorMode(state);
 
   // isTickUpdate: same last candle time = only price updated, not a new bar
-  const isTickUpdate = !showLineBreak && !initial && isIntraday(state.interval) && previousLastTime === latest?.time
+  const isTickUpdate = !isLineBreak(state) && !initial && isIntraday(state.interval) && previousLastTime === latest?.time
     && previousRows.length === rows.length && rows.every((row, index) => row.time === previousRows[index].time);
 
   // Only apply chart/series options on full reloads to avoid resetting pan/zoom state
@@ -772,7 +763,7 @@ function applyPayload(state, payload, initial = false) {
         tickMarkFormatter: (time) => tickFormatter(state.interval, time)
       }
     });
-    state.instance.candleSeries.applyOptions({ priceFormat, wickVisible: !showLineBreak });
+    state.instance.candleSeries.applyOptions({ priceFormat, wickVisible: !isLineBreak(state) });
     for (const series of Object.values(state.instance.bbSeries)) series.applyOptions({ priceFormat });
     for (const period of MA_PERIODS) {
       state.instance.maSeries[period].applyOptions({ priceFormat });
@@ -800,19 +791,20 @@ function applyPayload(state, payload, initial = false) {
     }
   } else {
     for (const period of MA_PERIODS) {
-      state.instance.maSeries[period].setData(!showLineBreak && state.visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
+      state.instance.maSeries[period].setData(!isLineBreak(state) && state.visible[`ma${period}`] ? calcVisibleSma(state, period) : []);
     }
   }
 
   updateBollinger(state);
-  state.card.querySelector('[data-series="candle"] .candle-label').textContent = showLineBreak ? "삼선" : "캔들";
+  updateMacdMarkers(state);
+  state.card.querySelector('[data-series="candle"] .candle-label').textContent = isLineBreak(state) ? "삼선" : "캔들";
   state.card.querySelector(".price-tooltip").style.display = "none";
   renderLegend(state, payload);
   if (initial || isIntraday(state.interval)) keepLatestVisible(state);
   requestAnimationFrame(() => drawMacdBackground(state));
   state.card.classList.add("loaded");
-  state.card.classList.toggle("no-line-break", showLineBreak && !rows.length);
-  if (showLineBreak && !rows.length) state.card.querySelector(".loading").textContent = "삼선 돌파가 없습니다";
+  state.card.classList.toggle("no-line-break", isLineBreak(state) && !rows.length);
+  if (isLineBreak(state) && !rows.length) state.card.querySelector(".loading").textContent = "삼선 돌파가 없습니다";
   syncPriceScaleWidths();
   scheduleTimeAlignment();
   state.trendEditor?.schedule();
@@ -824,8 +816,8 @@ async function fetchChart(state) {
     symbol: state.item.symbol,
     name: state.item.name,
     interval: state.interval,
-    limit: String(showLineBreak ? LINE_BREAK_FETCH_LIMIT : Math.max(FETCH_LIMIT, state.limit + WARMUP_BARS)),
-    chartType: showLineBreak ? "line-break" : "candles",
+    limit: String(isLineBreak(state) ? LINE_BREAK_FETCH_LIMIT : Math.max(FETCH_LIMIT, state.limit + WARMUP_BARS)),
+    chartType: isLineBreak(state) ? "line-break" : "candles",
     mode: sessionMode
   });
   const response = await fetch(`/stock8-7/api/chart?${params.toString()}`);
@@ -837,7 +829,7 @@ async function fetchChart(state) {
 }
 
 function chartRequestKey(state) {
-  return `${state.item.symbol}:${state.interval}:${state.limit}:${sessionMode}:${showLineBreak}`;
+  return `${state.item.symbol}:${state.interval}:${state.limit}:${sessionMode}:${isLineBreak(state)}`;
 }
 
 async function refreshCard(state, initial = false) {
@@ -931,13 +923,16 @@ function bindPeriod(card, state) {
   });
 }
 
-async function createCard(item, index) {
+async function createCard(item, index, view = {}, position = index) {
   const fragment = template.content.cloneNode(true);
   const card = fragment.querySelector(".chart-card");
   const stage = fragment.querySelector(".chart-stage");
   const bgCanvas = fragment.querySelector(".macd-bg");
-  const id = `card-${index}`;
+  const id = `card-${position}`;
   card.dataset.cardId = id;
+  card.dataset.slotIndex = String(index);
+  card.dataset.chartType = view.chartType || 'global';
+  card.setAttribute('aria-label', `${item.name || item.symbol} ${view.chartType === 'line-break' ? '삼선전환도' : '캔들차트'}`);
   card.querySelector('.symbol-title').textContent = item.name || item.symbol;
   card.querySelector('.symbol-title').title = item.name || item.symbol;
   card.tabIndex = -1;
@@ -948,6 +943,8 @@ async function createCard(item, index) {
     bgCanvas,
     item: {symbol:item.symbol, name:item.name, decimals:item.decimals},
     slotIndex: index,
+    chartType: view.chartType || null,
+    macdSignals: Boolean(view.macdSignals),
     interval: globalWeekly ? "1wk" : item.interval,
     restoreInterval: item.interval,
     restoreLimit: item.limit,
@@ -1078,6 +1075,7 @@ async function refreshAll(initial = false) {
 document.querySelectorAll(".chart-toggle").forEach((button) => {
   button.addEventListener("click", async () => {
     const feature = button.dataset.feature;
+    if (feature === 'line-break' && LAYOUTS[layoutIndex] === '4x4') return;
     if (feature === "bb") showBollinger = !showBollinger;
     if (feature === "weekly") globalWeekly = !globalWeekly;
     if (feature === "line-break") showLineBreak = !showLineBreak;
@@ -1122,24 +1120,34 @@ sessionButtons.forEach((button) => {
 });
 
 document.querySelector("#layoutButton").addEventListener("click", () => {
+  const previousLayout = LAYOUTS[layoutIndex];
   layoutIndex = (layoutIndex + 1) % LAYOUTS.length;
   chartGrid.dataset.layout = LAYOUTS[layoutIndex];
-  const start = activePage * SLOTS_PER_PAGE;
-  const count = layoutChartCount(LAYOUTS[layoutIndex]);
-  for (const state of chartState.values()) {
-    if (state.slotIndex < start || state.slotIndex >= start + count) disposeCard(state);
+  const paired = LAYOUTS[layoutIndex] === '4x4';
+  const lineBreakButton = document.querySelector('[data-feature="line-break"]');
+  lineBreakButton.disabled = paired;
+  lineBreakButton.classList.toggle('active', !paired && showLineBreak);
+  lineBreakButton.setAttribute('aria-pressed', String(!paired && showLineBreak));
+  if (paired || previousLayout === '4x4') {
+    if (sharedState) void renderPage();
+  } else {
+    const start = activePage * SLOTS_PER_PAGE;
+    const count = layoutChartCount(LAYOUTS[layoutIndex]);
+    for (const state of chartState.values()) {
+      if (state.slotIndex < start || state.slotIndex >= start + count) disposeCard(state);
+    }
+    const pending = [];
+    for (let offset = 0; offset < count; offset++) {
+      const index = start + offset;
+      if (!chartState.has(`card-${offset}`) && sharedState) pending.push(createCard(sharedState.slots[index], index, {}, offset));
+    }
+    void Promise.all(pending).then(() => { fitChartsToSlots(); scheduleTimeAlignment(); });
+    fitChartsToSlots();
+    scheduleTimeAlignment();
   }
-  const pending = [];
-  for (let offset = 0; offset < count; offset++) {
-    const index = start + offset;
-    if (!chartState.has(`card-${index}`) && sharedState) pending.push(createCard(sharedState.slots[index], index));
-  }
-  void Promise.all(pending).then(() => { fitChartsToSlots(); scheduleTimeAlignment(); });
-  fitChartsToSlots();
-  scheduleTimeAlignment();
   const button = document.querySelector("#layoutButton");
-  button.title = `현재 ${LAYOUTS[layoutIndex]} (가로 × 세로). 클릭하면 다음 배치`;
-  button.setAttribute("aria-label", `배치 ${LAYOUTS[layoutIndex]}`);
+  button.title = paired ? '새 4x4 캔들·삼선 배치: 첫 두 종목을 위 캔들·아래 삼선으로 표시. 클릭하면 기존 2x2 배치' : `현재 ${LAYOUTS[layoutIndex]} (가로 × 세로). 클릭하면 다음 배치`;
+  button.setAttribute("aria-label", paired ? "배치 4x4 캔들·삼선" : `배치 ${LAYOUTS[layoutIndex]}`);
 });
 document.querySelector("#nextButton").addEventListener("click", () => {
   activePage = adjacentPage(activePage, 1);
