@@ -62,10 +62,10 @@ export function macdCrossMarkers(macd) {
     const previous = macd[index - 1].value - macd[index - 1].signal;
     const current = macd[index].value - macd[index].signal;
     if (previous <= 0 && current > 0) markers.push({
-      time: macd[index].time, position: 'belowBar', color: '#dc2626', shape: 'arrowUp', size: 0.9
+      time: macd[index].time, position: 'belowBar', color: '#dc2626', shape: 'arrowUp', size: 1.05
     });
     else if (previous >= 0 && current < 0) markers.push({
-      time: macd[index].time, position: 'aboveBar', color: '#2563eb', shape: 'arrowDown', size: 0.6
+      time: macd[index].time, position: 'aboveBar', color: '#2563eb', shape: 'arrowDown', size: 0.75
     });
   }
   return markers;

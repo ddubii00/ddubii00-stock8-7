@@ -98,7 +98,7 @@ function updateMacdMarkers(state) {
   // Native markers stack at the same time/position. An invisible spacer adds
   // breathing room from the wick while following pan, zoom and price scaling.
   state.instance.candleSeries.setMarkers(markers.flatMap(marker => [
-    { time: marker.time, position: marker.position, shape: 'circle', color: 'transparent', size: 0.4 },
+    { time: marker.time, position: marker.position, shape: 'circle', color: 'transparent', size: 0.65 },
     marker
   ]));
   state.card.dataset.macdSignals = String(markers.length);
