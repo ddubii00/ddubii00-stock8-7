@@ -24,7 +24,7 @@ export function layoutViews(layout) {
     { slot: 1, chartType: 'candles', macdSignals: true },
     { slot: 1, chartType: 'line-break', macdSignals: false }
   ].slice(0, layoutChartCount(layout));
-  return Array.from({ length: layoutChartCount(layout) }, (_, slot) => ({ slot, chartType: null, macdSignals: false }));
+  return Array.from({ length: layoutChartCount(layout) }, (_, slot) => ({ slot, chartType: null, macdSignals: true }));
 }
 export const INTERVALS = ['1m', '3m', '5m', '10m', '15m', '30m', '60m', '1d', '1wk', '1mo'];
 const DEFAULTS = [

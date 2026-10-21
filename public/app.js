@@ -1166,7 +1166,7 @@ document.querySelector("#layoutButton").addEventListener("click", () => {
     const pending = [];
     for (let offset = 0; offset < count; offset++) {
       const index = start + offset;
-      if (!chartState.has(`card-${offset}`) && sharedState) pending.push(createCard(sharedState.slots[index], index, {}, offset));
+      if (!chartState.has(`card-${offset}`) && sharedState) pending.push(createCard(sharedState.slots[index], index, layoutViews(LAYOUTS[layoutIndex])[offset], offset));
     }
     void Promise.all(pending).then(() => { fitChartsToSlots(); scheduleTimeAlignment(); });
     fitChartsToSlots();

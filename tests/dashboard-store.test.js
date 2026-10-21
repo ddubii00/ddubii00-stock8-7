@@ -109,7 +109,7 @@ test('paired layout shows only the first two saved slots on every page, with fix
   }
   for (const layout of LAYOUTS.filter(layout => !isComparisonLayout(layout))) {
     assert.deepEqual(layoutViews(layout).map(view => view.slot), Array.from({ length: layoutChartCount(layout) }, (_, index) => index));
-    assert.ok(layoutViews(layout).every(view => view.chartType === null && !view.macdSignals));
+    assert.ok(layoutViews(layout).every(view => view.chartType === null && view.macdSignals));
   }
 });
 
