@@ -409,8 +409,11 @@ function createLwChart(container, state) {
     wickUpColor: "#d92c2c",
     wickDownColor: "#1f5bd8",
     lastValueVisible: true,
-    priceLineVisible: true,
-    priceLineColor: "#ef4444",
+    priceLineVisible: !isLineBreak(state),
+    // An empty override uses the last plotted bar's red/blue color for its
+    // price label, including live candle changes and line-break reversals.
+    priceLineColor: "",
+    priceLineStyle: LightweightCharts.LineStyle.Dotted,
     priceLineWidth: 1,
     priceFormat
   });
@@ -677,6 +680,7 @@ function drawMacdBackground(state) {
 }
 
 function syncIndicatorMode(state) {
+  state.instance.candleSeries.applyOptions({ priceLineVisible: !isLineBreak(state) });
   state.card.setAttribute('aria-label', `${state.item.name || state.item.symbol} ${isLineBreak(state) ? '삼선전환도' : '캔들차트'}`);
   for (const period of MA_PERIODS) {
     state.instance.maSeries[period].applyOptions({ visible: !isLineBreak(state) && state.visible[`ma${period}`] });
