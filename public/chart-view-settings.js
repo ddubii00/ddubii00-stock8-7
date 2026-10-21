@@ -6,17 +6,27 @@ export function initialViewLimit(slot, chartType, candleLimit = slot.limit) {
   return chartType === 'line-break' ? slot.lineBreakLimit ?? halfCandleLimit(candleLimit) : candleLimit;
 }
 
+export function initialViewInterval(slot, chartType) {
+  return chartType === 'line-break' ? slot.lineBreakInterval ?? slot.interval : slot.interval;
+}
+
 export function initialComparisonChanges(slots, start, views, candleLimit) {
   const indices = [...new Set(views.filter(view => view.chartType === 'line-break').map(view => start + view.slot))];
-  return indices.filter(index => slots[index].lineBreakLimit == null).map(index => ({
-    type: 'slot', index, patch: { lineBreakLimit: halfCandleLimit(candleLimit ?? slots[index].limit) }
-  }));
+  return indices.flatMap(index => {
+    const slot = slots[index];
+    const patch = {};
+    if (slot.lineBreakLimit == null) patch.lineBreakLimit = halfCandleLimit(candleLimit ?? slot.limit);
+    if (slot.lineBreakInterval == null) patch.lineBreakInterval = slot.interval;
+    return Object.keys(patch).length ? [{ type: 'slot', index, patch }] : [];
+  });
 }
 
 export function slotPatchForView(state, patch) {
-  if (state.chartType !== 'line-break' || !('limit' in patch)) return patch;
-  const { limit, ...rest } = patch;
-  return { ...rest, lineBreakLimit: limit };
+  if (state.chartType !== 'line-break') return patch;
+  const { limit, interval, ...result } = patch;
+  if ('limit' in patch) result.lineBreakLimit = limit;
+  if ('interval' in patch) result.lineBreakInterval = interval;
+  return result;
 }
 
 // A shared candle-count update must not overwrite an already displayed paired

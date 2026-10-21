@@ -1,5 +1,5 @@
 import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers } from "./chart-indicators.js";
-import { halfCandleLimit, initialViewLimit, initialComparisonChanges, slotPatchForView, viewLimitsFromShared } from "./chart-view-settings.js";
+import { halfCandleLimit, initialViewLimit, initialViewInterval, initialComparisonChanges, slotPatchForView, viewLimitsFromShared } from "./chart-view-settings.js";
 import { LineBreakPriceBadge } from "./line-break-price-badge.js";
 import { calculateThreeLineBreak } from "./three-line-break.js";
 import { SharedDashboard } from "./shared-dashboard.js";
@@ -256,12 +256,13 @@ function applySharedState(value) {
   for (const state of chartState.values()) {
     if (state.disposed) continue;
     const slot = value.slots[state.slotIndex];
-    const interval = globalWeekly && !state.weeklyLocal ? "1wk" : slot.interval;
+    const restoreInterval = initialViewInterval(slot, state.chartType);
+    const interval = globalWeekly && !state.weeklyLocal ? "1wk" : restoreInterval;
     const { limit, restoreLimit } = viewLimitsFromShared(state, slot, globalWeekly && !state.weeklyLocal);
     const changed = state.item.symbol !== slot.symbol || state.interval !== interval || state.limit !== limit;
     const symbolChanged = state.item.symbol !== slot.symbol;
     state.item = { symbol: slot.symbol, name: slot.name, decimals: slot.decimals };
-    state.restoreInterval = slot.interval;
+    state.restoreInterval = restoreInterval;
     state.restoreLimit = restoreLimit;
     state.interval = interval;
     state.limit = limit;
@@ -958,8 +959,8 @@ async function createCard(item, index, view = {}, position = index) {
     slotIndex: index,
     chartType: view.chartType || null,
     macdSignals: Boolean(view.macdSignals),
-    interval: globalWeekly ? "1wk" : item.interval,
-    restoreInterval: item.interval,
+    interval: globalWeekly ? "1wk" : initialViewInterval(item, view.chartType),
+    restoreInterval: initialViewInterval(item, view.chartType),
     restoreLimit: initialViewLimit(item, view.chartType),
     savedLineBreakLimit: item.lineBreakLimit ?? null,
     weeklyLocal: false,
