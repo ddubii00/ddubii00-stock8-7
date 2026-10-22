@@ -15,6 +15,18 @@ globalThis.fetch = async (input, options) => {
     return Response.json({ chart: { result: [{ meta: { chartPreviousClose: 29900, regularMarketPrice: prices.at(-1) }, timestamp: timestamps,
       indicators: { quote: [{ open: prices, high: prices.map(p => p + 0.25), low: prices.map(p => p - 0.25), close: prices, volume: prices.map(() => 12) }] } }] } });
   }
+  if (url.hostname === 'polling.finance.naver.com') {
+    if (process.env.FIXTURE_NAVER_DOWN === '1') return Response.json({}, { status: 503 });
+    return Response.json({ datas: [{ reutersCode: 'NQcv1', closePrice: '29,950.25',
+      compareToPreviousClosePrice: '-149.75', fluctuationsRatio: '-0.50',
+      localTradedAt: new Date((now - 600) * 1000).toISOString(),
+      stockExchangeType: { delayTime: 10 }, marketStatus: 'OPEN' }] });
+  }
+  if (url.hostname === 'api.stock.naver.com') {
+    if (process.env.FIXTURE_NAVER_DOWN === '1') return Response.json({}, { status: 503 });
+    return Response.json([{ localDate: '20261021', openPrice: 30010, highPrice: 30050, lowPrice: 29940, closePrice: 30020, accumulatedTradingVolume: 10 },
+      { localDate: '20261022', openPrice: 30020, highPrice: 30030, lowPrice: 29940, closePrice: 29950.25, accumulatedTradingVolume: 15 }]);
+  }
   if (url.hostname !== 'openapi.koreainvestment.com') throw new Error('Unexpected non-KIS source ' + url.hostname);
   if (url.pathname.endsWith('tokenP')) return process.env.KIS_NQ_CONTRACT === 'NQU27'
     ? Response.json({ msg_cd: 'EGW00133', msg1: '접근토큰 발급 잠시 후 다시 시도하세요(1분당 1회)' }, { status: 403 })

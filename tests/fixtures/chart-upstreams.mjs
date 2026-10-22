@@ -11,6 +11,8 @@ const indexNow = indexDate.getTime()/1000;
 const indexDateKey = indexDate.toISOString().slice(0,10).replaceAll('-','');
 globalThis.fetch = async input => {
   const url = new URL(String(input));
+  if (url.hostname==='polling.finance.naver.com' && url.pathname.endsWith('/futures/NQcv1')) return Response.json({datas:[{reutersCode:'NQcv1',closePrice:'25,499.75',compareToPreviousClosePrice:'-1.25',fluctuationsRatio:'-0.005',localTradedAt:new Date((now-600)*1000).toISOString(),stockExchangeType:{delayTime:10}}]});
+  if (url.hostname==='api.stock.naver.com' && url.pathname.includes('/foreign/futures/')) return Response.json([{localDate:'20261022',openPrice:25500,highPrice:25510,lowPrice:25490,closePrice:25499.75,accumulatedTradingVolume:10}]);
   if (url.hostname==='api.stock.naver.com' && /chart\/domestic\/index\/(KOSPI|KOSDAQ)$/.test(url.pathname)) {
     return Response.json({priceInfos:Array.from({length:91},(_,i)=>({localDateTime:`${indexDateKey}${String(9+Math.floor(i/60)).padStart(2,'0')}${String(i%60).padStart(2,'0')}00`,currentPrice:5700+(i%2),openPrice:5700,highPrice:5702,lowPrice:5699,accumulatedTradingVolume:100+i*10}))});
   }

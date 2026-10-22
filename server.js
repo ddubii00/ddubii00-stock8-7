@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import { createNaverIndexHistory } from "./lib/naver-index-history.js";
+import { createNaverFutures } from "./lib/naver-futures.js";
 import { staticSearch } from "./public/search-catalog.js";
 import { createProgressiveSearch } from "./lib/progressive-search.js";
 import { createCatalogLoader } from "./lib/search-catalog-cache.js";
@@ -51,6 +52,7 @@ const MAX_LINE_BREAK_HISTORY = 10000;
 const naverMinuteCache = new Map();
 const naverIndexHistory = createNaverIndexHistory({ fetcher: fetchWithTimeout });
 const normalizeUsPriceChange = createUsPriceChange({ fetcher: fetchWithTimeout });
+const naverFutures = createNaverFutures({ fetcher: fetchWithTimeout, loadIntraday: getPublicFuturesHistory });
 
 
 const MIME = {
@@ -1636,12 +1638,8 @@ function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {
   return rows;
 }
 
-function canFallbackFromKisFutures(error) {
-  return error?.kisCode === "EGW00133" || error?.kisCode === "EGW00550";
-}
-
-async function getYahooFuturesAfterKisFailure(interval, limit, kisError) {
-  const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
+async function getPublicFuturesHistory(interval, limit) {
+  const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1m"];
   const query = `range=${encodeURIComponent(config.range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=true`;
   for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
     try {
@@ -1650,29 +1648,33 @@ async function getYahooFuturesAfterKisFailure(interval, limit, kisError) {
       const payload = parseYahooChart("NQ=F", await response.json());
       if (!payload.series.length) continue;
       const series = config.aggregate ? aggregateRows(payload.series, config.aggregate) : payload.series;
-      const latest = series.at(-1);
-      const previousClose = Number.isFinite(payload.previousClose) ? payload.previousClose : null;
-      const price = latest.close;
-      const change = previousClose == null ? null : price - previousClose;
-      return { ...payload, price, previousClose, change,
-        changePercent: previousClose ? change / previousClose * 100 : null,
-        asOf: latest.time, marketTime: latest.time, series: series.slice(-limit),
-        marketStatus: "Yahoo 지연 시세", source: "yahoo-futures-fallback", realtime: false,
-        kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: false, error: kisErrorMessage(kisError) } };
-    } catch { /* Try the other real-data endpoint; never create sample futures bars. */ }
+      return { series: series.slice(-limit), seriesSource: "yahoo-futures-history" };
+    } catch { /* Only actual NQ OHLC history is accepted. */ }
   }
-  throw Object.assign(new Error(`KIS 선물 시세 조회 실패. ${kisErrorMessage(kisError)} 공개 선물 시세도 조회할 수 없습니다.`), { status: 503 });
+  throw new Error("NQ 분봉 이력을 받지 못했습니다.");
+}
+
+async function getNqData(interval, limit, quoteOnly = false) {
+  const kis = { ...kisStatusPayload(), supported: true, attempted: KIS_FUTURES_ENABLED, ok: false };
+  if (KIS_FUTURES_ENABLED) {
+    try {
+      const payload = quoteOnly ? await kisFutures.quote() : await kisFutures.chart(interval, limit);
+      return { ...payload, kis: { ...kis, ok: true } };
+    } catch (error) { kis.error = kisErrorMessage(error); }
+  }
+  try {
+    const payload = quoteOnly ? await naverFutures.quote() : await naverFutures.chart(interval, limit);
+    return { ...payload, kis };
+  } catch (error) {
+    throw Object.assign(new Error([kis.error ? `KIS 선물 조회 실패: ${kis.error}` : '', `네이버 선물 조회 실패: ${error.message}`].filter(Boolean).join(' · ')), { status: 503 });
+  }
 }
 
 async function getIntraday(symbol, interval = "1m", mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
-  if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) {
+  if (normalized === "NQ=F") {
     const futuresInterval = INTERVAL_CONFIG[interval] && isIntradayInterval(interval) ? interval : "1m";
-    try { return await kisFutures.chart(futuresInterval, 400); }
-    catch (error) {
-      if (canFallbackFromKisFutures(error)) return getYahooFuturesAfterKisFailure(futuresInterval, 400, error);
-      throw error;
-    }
+    return getNqData(futuresInterval, 400);
   }
   try {
     const includePrePost = mode === "NTX" && isUsSymbol(normalized);
@@ -1710,15 +1712,7 @@ async function getIntraday(symbol, interval = "1m", mode = "KRX") {
 
 async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", lineBreak = false) {
   const normalized = symbol.trim().toUpperCase();
-  if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) {
-    try {
-      return { ...(await kisFutures.chart(INTERVAL_CONFIG[interval] ? interval : "1d", limit)),
-        kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: true } };
-    } catch (error) {
-      if (canFallbackFromKisFutures(error)) return getYahooFuturesAfterKisFailure(interval, limit, error);
-      throw Object.assign(new Error(`KIS 선물 시세 조회 실패. ${kisErrorMessage(error)}`), { status: 503 });
-    }
-  }
+  if (normalized === "NQ=F") return getNqData(INTERVAL_CONFIG[interval] ? interval : "1d", limit);
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
   let kisMeta = {
     ...kisStatusPayload(),
@@ -1993,6 +1987,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
 
 async function getCandles(symbol, limit = 140) {
   const normalized = symbol.trim().toUpperCase();
+  if (normalized === "NQ=F") return (await getNqData("1d", limit)).series;
   try {
     const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSymbol(normalized))}&i=d`;
     const response = await fetchWithTimeout(url);
@@ -2007,16 +2002,7 @@ async function getCandles(symbol, limit = 140) {
 
 async function getQuote(symbol, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
-  if (normalized === "NQ=F" && KIS_FUTURES_ENABLED) {
-    try { return { ...(await kisFutures.quote()), kis: { ...kisStatusPayload(), supported: true, attempted: true, ok: true } }; }
-    catch (error) {
-      if (canFallbackFromKisFutures(error)) {
-        const { series, ...quote } = await getYahooFuturesAfterKisFailure("1m", 1, error);
-        return quote;
-      }
-      throw Object.assign(new Error(`KIS 선물 현재가 조회 실패. ${kisErrorMessage(error)}`), { status: 503 });
-    }
-  }
+  if (normalized === "NQ=F") return getNqData("1m", 1, true);
   const kisMeta = {
     ...kisStatusPayload(),
     supported: kisSupportsQuote(normalized, mode),

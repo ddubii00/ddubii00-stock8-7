@@ -48,23 +48,25 @@ test('configured KIS routes NQ quotes and every chart timeframe through authenti
   assert.equal(intraday.source, 'kis-futures-rest'); assert.ok(intraday.series.length > 120);
 });
 
-test('KIS CME entitlement failures keep real NQ futures bars with a visible delayed Yahoo label', async t => {
+test('any KIS CME entitlement failure uses Naver prices with explicit delayed/history source labels', async t => {
   const get = await server(t, 'NQH27');
   for (const path of ['/api/chart?symbol=NQ%3DF&interval=1m', '/api/quote?symbol=NQ%3DF', '/api/intraday?symbol=NQ%3DF']) {
     const response = await get(path); assert.equal(response.status, 200);
     const p = await response.json();
-    assert.equal(p.source, 'yahoo-futures-fallback');
-    assert.equal(p.marketStatus, 'Yahoo 지연 시세');
+    assert.equal(p.source, 'naver-futures');
+    assert.equal(p.marketStatus, '네이버 10분 지연');
     assert.equal(p.realtime, false);
     assert.equal(p.kis.ok, false);
     assert.match(p.kis.error, /EGW00550.*CME 시세 신청/);
-    assert.ok(p.price > 0);
+    assert.equal(p.price, 29950.25);
+    assert.equal(p.previousClose, 30100);
+    if (!path.includes('/quote')) assert.equal(p.seriesSource, 'yahoo-futures-history');
     if (!path.includes('/quote')) assert.ok(p.series.length > 0);
     assert.doesNotMatch(JSON.stringify(p), /fixture-secret|fixture-token/);
   }
 });
 
-test('CME entitlement failure without actual alternate bars remains an error', async t => {
+test('missing actual intraday history remains an error even when Naver quote succeeds', async t => {
   const get = await server(t, 'NQH27', { FIXTURE_YAHOO_DOWN: '1' });
   const response = await get('/api/chart?symbol=NQ%3DF&interval=1m');
   assert.equal(response.status, 503);
@@ -73,25 +75,25 @@ test('CME entitlement failure without actual alternate bars remains an error', a
   assert.equal(payload.series, undefined);
 });
 
-test('HTTP 500 preserves the KIS error code and reason instead of labeling all failures as CME permission errors', async t => {
+test('generic KIS HTTP 500 falls back to Naver and preserves the original error code and reason', async t => {
   const get = await server(t, 'NQM27');
   for (const path of ['/api/chart?symbol=NQ%3DF&interval=1m', '/api/quote?symbol=NQ%3DF']) {
-    const response = await get(path); assert.equal(response.status, 503);
+    const response = await get(path); assert.equal(response.status, 200);
     const p = await response.json();
-    assert.match(p.error, /HHDFC55010000 HTTP 500.*EGW00201.*초당/);
-    assert.doesNotMatch(p.error, /CME|fixture-key|fixture-secret|fixture-token/);
-    assert.equal(p.series, undefined);
+    assert.equal(p.source, 'naver-futures');
+    assert.match(p.kis.error, /HHDFC55010000 HTTP 500.*EGW00201.*초당/);
+    assert.doesNotMatch(p.kis.error, /CME|fixture-key|fixture-secret|fixture-token/);
   }
 });
 
-test('token issuance limit falls back only to real, visibly delayed Yahoo futures bars', async t => {
+test('token issuance limit falls back to Naver quote and actual NQ history', async t => {
   const get = await server(t, 'NQU27');
   for (const path of ['/api/chart?symbol=NQ%3DF&interval=1m&limit=80', '/api/quote?symbol=NQ%3DF', '/api/intraday?symbol=NQ%3DF']) {
     const response = await get(path);
     assert.equal(response.status, 200, path);
     const payload = await response.json();
-    assert.equal(payload.source, 'yahoo-futures-fallback');
-    assert.equal(payload.marketStatus, 'Yahoo 지연 시세');
+    assert.equal(payload.source, 'naver-futures');
+    assert.equal(payload.marketStatus, '네이버 10분 지연');
     assert.equal(payload.realtime, false);
     assert.equal(payload.kis.ok, false);
     assert.match(payload.kis.error, /EGW00133/);
@@ -121,5 +123,34 @@ test('a quote-only KIS HTTP 500 still shows actual KIS history without inventing
   assert.equal(payload.series.length, 80);
   assert.equal(payload.price, payload.series.at(-1).close);
   const quote = await get('/api/quote?symbol=NQ%3DF');
-  assert.equal(quote.status, 503);
+  assert.equal(quote.status, 200);
+  assert.equal((await quote.json()).source, 'naver-futures');
+});
+
+
+test('Naver daily, weekly and monthly bars remain available when Yahoo history is unavailable', async t => {
+  const get = await server(t, 'NQH27', { FIXTURE_YAHOO_DOWN: '1' });
+  for (const interval of ['1d', '1wk', '1mo']) {
+    const response = await get(`/api/chart?symbol=NQ%3DF&interval=${interval}`);
+    assert.equal(response.status, 200);
+    const p = await response.json();
+    assert.equal(p.source, 'naver-futures');
+    assert.equal(p.seriesSource, 'naver-futures-history');
+    assert.equal(p.price, 29950.25);
+    assert.equal(p.series.length, 2);
+  }
+});
+
+test('without KIS keys NQ uses Naver, while a Naver failure never becomes a Yahoo price or sample chart', async t => {
+  const get = await server(t, '', { KIS_APP_KEY: '', KIS_APP_SECRET: '' });
+  const p = await (await get('/api/chart?symbol=NQ%3DF&interval=1m')).json();
+  assert.equal(p.source, 'naver-futures');
+  assert.equal(p.kis.attempted, false);
+  assert.equal(p.seriesSource, 'yahoo-futures-history');
+  const down = await server(t, 'NQH27', { FIXTURE_NAVER_DOWN: '1' });
+  const response = await down('/api/chart?symbol=NQ%3DF&interval=1d');
+  assert.equal(response.status, 503);
+  const error = await response.json();
+  assert.match(error.error, /EGW00550.*네이버/s);
+  assert.equal(error.series, undefined);
 });

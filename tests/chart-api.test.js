@@ -40,14 +40,14 @@ test('chart API supplies longer real history for line breaks and never fabricate
     const response=await chart(`symbol=NQ%3DF&interval=${interval}&limit=400`);
     assert.equal(response.status,200);
     const future=await response.json();assert.equal(future.symbol,'NQ=F');assert.equal(future.decimals,2);
-    assert.equal(future.marketStatus,'선물');assert.ok(future.series.some(row=>row.close%1===.25));
+    assert.equal(future.marketStatus,'네이버 10분 지연');assert.ok(future.series.every(row=>Number.isInteger(row.close*4)));
   }
   const save=await fetch(base+'/api/state',{method:'PATCH',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({id:'register-futures',changes:[{type:'slot',index:0,patch:{symbol:'NQ=F',name:'나스닥100 선물',decimals:2}}]})});
   assert.equal(save.status,200);assert.equal((await save.json()).slots[0].symbol,'NQ=F');
   const unavailableFuture=await chart('symbol=FAIL%3DF&interval=1m');
   assert.equal(unavailableFuture.status,503);assert.match((await unavailableFuture.json()).error,/선물 시세/);
   const futureQuote=await(await fetch(base+'/api/quote?symbol=NQ%3DF',{headers})).json();
-  assert.equal(futureQuote.symbol,'NQ=F');assert.equal(futureQuote.marketStatus,'선물');
+  assert.equal(futureQuote.symbol,'NQ=F');assert.equal(futureQuote.marketStatus,'네이버 10분 지연');
   const futureLines=await(await chart('symbol=NQ%3DF&interval=1m&limit=10000&chartType=line-break')).json();
   assert.equal(futureLines.series.length,2000);assert.equal(futureLines.decimals,2);
   assert.equal((await(await fetch(base+'/api/state',{headers})).json()).slots[0].symbol,'NQ=F');
