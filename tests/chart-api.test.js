@@ -28,6 +28,17 @@ test('chart API supplies longer real history for line breaks and never fabricate
     if (query==='하이닉스') assert.ok(results.some(item=>item.name.includes('ETF')));
   }
   const chart=path=>fetch(base+'/api/chart?'+path,{headers});
+  const widgetSearch = await (await fetch(base+'/api/search?q=USTECH100', {headers})).json();
+  assert.equal(widgetSearch.results[0].symbol, 'USTECH100');
+  assert.equal(widgetSearch.pending, false);
+  for (const endpoint of ['chart', 'quote', 'intraday', 'candles']) {
+    const response = await fetch(`${base}/api/${endpoint}?symbol=USTECH100`, {headers});
+    assert.equal(response.status, 503);
+    const payload = await response.json();
+    assert.match(payload.error, /TradingView 위젯/);
+    assert.equal(payload.series, undefined);
+    assert.equal(payload.price, undefined);
+  }
   const resolved=await(await fetch(base+'/api/search?q=196170',{headers})).json();
   assert.equal(resolved.results.length,1);assert.equal(resolved.results[0].symbol,'196170.KQ');assert.equal(resolved.results[0].name,'알테오젠');
   const family=await(await fetch(base+'/api/search?q='+encodeURIComponent('나스닥'),{headers})).json();

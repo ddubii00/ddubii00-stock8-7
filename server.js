@@ -7,7 +7,7 @@ import { createCatalogLoader } from "./lib/search-catalog-cache.js";
 import { fetchKoreanMasterSymbols } from "./lib/korean-master.js";
 import { createEtfSearch } from "./lib/etf-search.js";
 import { createKoreanCodeResolver, parseYahooSearchResults } from "./lib/symbol-search.js";
-import { exactCatalogItem, isFuturesSymbol } from "./public/instrument-catalog.js";
+import { exactCatalogItem, isFuturesSymbol, isWidgetSymbol } from "./public/instrument-catalog.js";
 import { normalizeSearchQuery, parseKoreanCode, parseUsTicker, manualSearchItem, prioritizeExactInstrument } from "./public/symbol-input.js";
 import { createServer } from "node:http";
 import { readFile, writeFile, rename } from "node:fs/promises";
@@ -1672,6 +1672,7 @@ async function getNqData(interval, limit, quoteOnly = false) {
 
 async function getIntraday(symbol, interval = "1m", mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
+  if (isWidgetSymbol(normalized)) throw Object.assign(new Error("USTECH100은 TradingView 위젯으로 표시합니다. 원시 시세 API는 제공하지 않습니다."), { status: 503 });
   if (normalized === "NQ=F") {
     const futuresInterval = INTERVAL_CONFIG[interval] && isIntradayInterval(interval) ? interval : "1m";
     return getNqData(futuresInterval, 400);
@@ -1712,6 +1713,7 @@ async function getIntraday(symbol, interval = "1m", mode = "KRX") {
 
 async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", lineBreak = false) {
   const normalized = symbol.trim().toUpperCase();
+  if (isWidgetSymbol(normalized)) throw Object.assign(new Error("USTECH100은 TradingView 위젯으로 표시합니다. 원시 시세 API는 제공하지 않습니다."), { status: 503 });
   if (normalized === "NQ=F") return getNqData(INTERVAL_CONFIG[interval] ? interval : "1d", limit);
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
   let kisMeta = {
@@ -1987,6 +1989,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
 
 async function getCandles(symbol, limit = 140) {
   const normalized = symbol.trim().toUpperCase();
+  if (isWidgetSymbol(normalized)) throw Object.assign(new Error("USTECH100은 TradingView 위젯으로 표시합니다. 원시 시세 API는 제공하지 않습니다."), { status: 503 });
   if (normalized === "NQ=F") return (await getNqData("1d", limit)).series;
   try {
     const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSymbol(normalized))}&i=d`;
@@ -2002,6 +2005,7 @@ async function getCandles(symbol, limit = 140) {
 
 async function getQuote(symbol, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
+  if (isWidgetSymbol(normalized)) throw Object.assign(new Error("USTECH100은 TradingView 위젯으로 표시합니다. 원시 시세 API는 제공하지 않습니다."), { status: 503 });
   if (normalized === "NQ=F") return getNqData("1m", 1, true);
   const kisMeta = {
     ...kisStatusPayload(),

@@ -8,7 +8,8 @@ import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount, layoutViews, isC
 import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
 import { mergeCandleHistory } from "./chart-history.js";
-import { isFuturesSymbol } from "./instrument-catalog.js";
+import { isFuturesSymbol, isWidgetSymbol } from "./instrument-catalog.js";
+import { mountTradingViewCard } from "./tradingview-card.js";
 import { buildCursorGroups, cursorTimeForChart, cursorTimeForLineBreak } from "./chart-alignment.js";
 
 const TIMEFRAMES = [
@@ -90,6 +91,7 @@ let alignmentFrame = 0;
 let hoveredChart = null;
 
 function isLineBreak(state) {
+  if (state.widget) return false;
   return state.chartType ? state.chartType === 'line-break' : showLineBreak;
 }
 
@@ -98,6 +100,7 @@ function bollingerEnabled() {
 }
 
 function updateMacdMarkers(state) {
+  if (state.widget) return;
   const markers = showMacdSignals && state.macdSignals && !isLineBreak(state) && state.visible.candle ? macdCrossMarkers(state.macd) : [];
   // Native markers stack at the same time/position. An invisible spacer adds
   // breathing room from the wick while following pan, zoom and price scaling.
@@ -110,6 +113,7 @@ function updateMacdMarkers(state) {
 
 function syncVerticalCursor() {
   for (const state of chartState.values()) {
+    if (state.widget) continue;
     const source = hoveredChart?.state;
     const sameGroup = source && state !== source && state.alignment && state.alignment === source.alignment;
     const timeZone = isKoreanSymbol(state.item.symbol) || isKoreanIndex(state.item.symbol) ? 'Asia/Seoul' : 'America/New_York';
@@ -166,7 +170,7 @@ function syncPriceScaleWidths() {
   priceScaleFitFrame = requestAnimationFrame(() => {
     priceScaleFitFrame = 0;
     const scales = [...chartState.values()]
-      .filter((state) => !state.disposed)
+      .filter((state) => !state.disposed && state.instance)
       .map((state) => state.instance.chart.priceScale("right"));
     // Share the widest label area, including prices that exceed the baseline.
     // Keep that width when switching symbols/pages so the plot does not jump.
@@ -183,7 +187,7 @@ function fitChartsToSlots() {
   cancelAnimationFrame(chartFitFrame);
   chartFitFrame = requestAnimationFrame(() => {
     for (const state of chartState.values()) {
-      if (state.disposed) continue;
+      if (state.disposed || state.widget) continue;
       const stage = state.card.querySelector(".chart-stage");
       const width = stage.clientWidth;
       const height = stage.clientHeight;
@@ -254,9 +258,18 @@ function applySharedState(value) {
   sharedState = value;
   document.querySelector("#instrumentsButton").disabled = false;
   if (first) { void renderPage(); return; }
-  for (const state of chartState.values()) {
+  for (const state of [...chartState.values()]) {
     if (state.disposed) continue;
     const slot = value.slots[state.slotIndex];
+    if (isWidgetSymbol(state.item.symbol) !== isWidgetSymbol(slot.symbol)) {
+      const position = Number(state.card.dataset.cardId.replace('card-', ''));
+      const before = state.card.nextSibling;
+      const view = { chartType: state.chartType, macdSignals: state.macdSignals };
+      disposeCard(state);
+      void createCard(slot, state.slotIndex, view, position, before);
+      continue;
+    }
+    if (state.widget) { state.item = { ...slot }; continue; }
     const restoreInterval = initialViewInterval(slot, state.chartType);
     const interval = globalWeekly && !state.weeklyLocal ? "1wk" : restoreInterval;
     const { limit, restoreLimit } = viewLimitsFromShared(state, slot, globalWeekly && !state.weeklyLocal);
@@ -284,8 +297,9 @@ function disposeCard(state) {
   state.requestId = (state.requestId || 0) + 1;
   state.trendEditor?.destroy();
   state.priceBadge?.destroy();
-  state.instance.observer.disconnect();
-  state.instance.chart.remove();
+  state.widget?.destroy();
+  state.instance?.observer.disconnect();
+  state.instance?.chart.remove();
   chartState.delete(state.card.dataset.cardId);
   state.card.remove();
   scheduleTimeAlignment();
@@ -341,6 +355,7 @@ function calcVisibleSma(state, period) {
 }
 
 function updateBollinger(state) {
+  if (state.widget) return;
   const visible = !isLineBreak(state) && state.visible.bb;
   const bands = visible ? calcBollinger(state.rows || []) : [];
   for (const key of ["upper", "middle", "lower"]) {
@@ -579,6 +594,7 @@ function shouldIgnoreIntradayPayload(state, rows, initial) {
 }
 
 function drawMacdBackground(state) {
+  if (state.widget) return;
   const { bgCanvas, rows, macd, instance } = state;
   if (state.disposed || !bgCanvas) return;
   const rect = bgCanvas.getBoundingClientRect();
@@ -667,6 +683,7 @@ function drawMacdBackground(state) {
 }
 
 function syncIndicatorMode(state) {
+  if (state.widget) return;
   state.instance.candleSeries.applyOptions({ priceLineVisible: !isLineBreak(state), lastValueVisible: !isLineBreak(state) });
   // The enlarged line-break badge is a DOM layer. Draw its hovered axis price
   // in a higher DOM layer too, so the current-price badge cannot cover it.
@@ -836,7 +853,7 @@ function chartRequestKey(state) {
 }
 
 async function refreshCard(state, initial = false) {
-  if (state.disposed) return;
+  if (state.disposed || state.widget) return;
   const key = chartRequestKey(state);
   if (!initial && state.pendingKey === key) return;
   const requestId = state.requestId = (state.requestId || 0) + 1;
@@ -927,7 +944,7 @@ function bindPeriod(card, state) {
   });
 }
 
-async function createCard(item, index, view = {}, position = index) {
+async function createCard(item, index, view = {}, position = index, before = null) {
   const fragment = template.content.cloneNode(true);
   const card = fragment.querySelector(".chart-card");
   const stage = fragment.querySelector(".chart-stage");
@@ -940,7 +957,7 @@ async function createCard(item, index, view = {}, position = index) {
   card.querySelector('.symbol-title').textContent = item.name || item.symbol;
   card.querySelector('.symbol-title').title = item.name || item.symbol;
   card.tabIndex = -1;
-  chartGrid.append(card);
+  chartGrid.insertBefore(card, before?.isConnected ? before : null);
 
   const state = {
     card,
@@ -969,6 +986,11 @@ async function createCard(item, index, view = {}, position = index) {
       bb: bollingerEnabled()
     }
   };
+  if (isWidgetSymbol(item.symbol)) {
+    state.widget = mountTradingViewCard(card, item.symbol);
+    chartState.set(id, state);
+    return;
+  }
   state.instance = createLwChart(stage, state);
   state.priceBadge = new LineBreakPriceBadge(state, () => isLineBreak(state), price => formatAxisPrice(price, state.item.symbol));
   syncIndicatorMode(state);
@@ -1103,6 +1125,7 @@ document.querySelectorAll(".chart-toggle").forEach((button) => {
     button.classList.toggle("active", enabled);
     button.setAttribute("aria-pressed", String(enabled));
     await Promise.all([...chartState.values()].map(async (state) => {
+      if (state.widget) return;
       if (feature === "bb") {
         state.visible.bb = bollingerEnabled();
         const local = state.card.querySelector('[data-series="bb"]');

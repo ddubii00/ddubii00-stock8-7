@@ -5,6 +5,8 @@ import { createDashboard, applyChanges } from '../public/dashboard-model.js';
 import { manualSearchItem } from '../public/symbol-input.js';
 import { parseYahooSearchResults } from '../lib/symbol-search.js';
 import { validSymbol } from '../public/dashboard-model.js';
+import { isFuturesSymbol, isWidgetSymbol } from '../public/instrument-catalog.js';
+import { staticSearch } from '../public/search-catalog.js';
 
 test('settings save exactly 40 slots while preserving timeframes and symbol-shared lines', () => {
   const state = createDashboard();
@@ -70,4 +72,32 @@ test('future registration and trend lines survive model serialization with decim
   const reopened=JSON.parse(JSON.stringify(saved));
   assert.equal(reopened.slots[0].symbol,'NQ=F');assert.equal(reopened.slots[0].decimals,2);
   assert.deepEqual(reopened.lines['NQ=F'],[line]);
+});
+
+test('USTECH aliases select the external CFD rather than a guessed US ticker or NQ futures', () => {
+  for (const query of ['ustech', 'USTECH100', 'USTECH100CFD', 'WHSELFINVEST:USTECH100CFD', '나스닥100 CFD']) {
+    const item = manualSearchItem(query);
+    assert.equal(item.symbol, 'USTECH100');
+    assert.equal(item.name, 'US Tech 100 CFD (USTECH100)');
+    assert.equal(staticSearch(query)[0].symbol, 'USTECH100');
+  }
+  assert.equal(validSymbol('USTECH100'), true);
+  assert.equal(isWidgetSymbol('USTECH100'), true);
+  assert.equal(isWidgetSymbol('NQ=F'), false);
+  assert.equal(isFuturesSymbol('USTECH100'), false);
+  for (const symbol of ['ustech100', 'USTECH100?key=x', 'WHSELFINVEST:USTECH100CFD']) assert.equal(validSymbol(symbol), false);
+});
+
+test('saving a widget in any page preserves other instruments, independent intervals/counts, and shared drawings', () => {
+  const state = createDashboard();
+  state.slots[0].lineBreakInterval = '5m'; state.slots[0].lineBreakLimit = 80;
+  state.lines['000660.KS'] = [{ id:'keep', start:{ time:1700000000, price:100 }, end:{ time:1700000060, price:120 }, width:2 }];
+  const draft = structuredClone(state.slots);
+  draft[39] = manualSearchItem('USTECH');
+  const updated = applyChanges(state, instrumentChanges(draft, state.slots));
+  const reopened = JSON.parse(JSON.stringify(updated));
+  assert.equal(reopened.slots[39].symbol, 'USTECH100');
+  assert.deepEqual(reopened.slots.slice(0,39), state.slots.slice(0,39));
+  assert.deepEqual(reopened.lines, state.lines);
+  assert.deepEqual(instrumentChanges(reopened.slots, reopened.slots), []);
 });

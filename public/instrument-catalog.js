@@ -6,6 +6,7 @@ export const INSTRUMENT_CATALOG = [
   { symbol: '^DJI', name: '다우존스', aliases: ['다우', 'DOW', 'DJI', 'DOW JONES'] },
   { symbol: '^NDX', name: '나스닥 100', aliases: ['나스닥100', 'NASDAQ100', 'NDX', '나스닥100지수', 'NASDAQ100 INDEX'] },
   { symbol: 'NQ=F', name: '나스닥100 선물 (NQ)', aliases: ['NQ', '나스닥선물', '나스닥100선물', 'NASDAQ FUTURES', 'NASDAQ100 FUTURES', 'NASDAQ100선물', 'E-mini Nasdaq-100', 'E-mini Nasdaq 100'] },
+  { symbol: 'USTECH100', name: 'US Tech 100 CFD (USTECH100)', aliases: ['USTECH', 'USTECH100CFD', 'WHSELFINVEST:USTECH100CFD', '나스닥100 CFD', 'US TECH 100 CFD'] },
   { symbol: '^RUT', name: '러셀 2000', aliases: ['러셀2000', 'RUSSELL2000'] },
   { symbol: '^VIX', name: 'VIX', aliases: ['변동성지수', '공포지수'] },
   { symbol: 'SPY.US', name: 'SPDR S&P 500 ETF', aliases: ['SPY', '미국 ETF'] },
@@ -22,6 +23,9 @@ export const INSTRUMENT_CATALOG = [
 ];
 export function isFuturesSymbol(symbol) {
   return typeof symbol === 'string' && /^[A-Z][A-Z0-9]{0,11}=F$/.test(symbol);
+}
+export function isWidgetSymbol(symbol) {
+  return symbol === 'USTECH100';
 }
 export function exactCatalogItem(query) {
   const compact = value => String(value).normalize('NFKC').toUpperCase().replace(/\s+/g, '');
