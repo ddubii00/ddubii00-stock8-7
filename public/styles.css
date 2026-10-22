@@ -484,16 +484,6 @@ body {
   color: #1565c0;
 }
 
-.naver-futures-link:not([hidden]) {
-  display: inline-flex;
-  align-items: center;
-  color: #1565c0;
-  font-size: 10px;
-  font-weight: 700;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
 .last-price.up {
   color: #dc2626;
 }
