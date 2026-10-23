@@ -11,7 +11,7 @@ import { mergeCandleHistory } from "./chart-history.js";
 import { isFuturesSymbol, isWidgetSymbol } from "./instrument-catalog.js";
 import { mountTradingViewCard } from "./tradingview-card.js";
 import { buildCursorGroups, cursorTimeForChart, cursorTimeForLineBreak } from "./chart-alignment.js";
-import { koreanClosingBoundaries } from "./chart-session-markers.js";
+import { koreanClosingBoundaries, lineBreakDateBoundaries } from "./chart-session-markers.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -614,7 +614,10 @@ function drawMacdBackground(state) {
   ctx.strokeStyle = "rgba(31, 91, 216, 0.45)";
   ctx.lineWidth = 0.6 * dpr;
   ctx.setLineDash([2 * dpr, 4 * dpr]);
-  for (const boundary of koreanClosingBoundaries(rows || [], state.item.symbol, state.interval)) {
+  const boundaries = isLineBreak(state)
+    ? lineBreakDateBoundaries(rows || [], state.interval, isKoreanSymbol(state.item.symbol) || isKoreanIndex(state.item.symbol) ? 'Asia/Seoul' : 'America/New_York')
+    : koreanClosingBoundaries(rows || [], state.item.symbol, state.interval);
+  for (const boundary of boundaries) {
     const fromX = timeScale.timeToCoordinate(boundary.from);
     const toX = boundary.to === boundary.from ? fromX : timeScale.timeToCoordinate(boundary.to);
     if (!Number.isFinite(fromX) || !Number.isFinite(toX)) continue;
