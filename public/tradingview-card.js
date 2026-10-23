@@ -44,7 +44,8 @@ export function mountTradingViewCard(card, symbol) {
     script.textContent = JSON.stringify({ autosize: true, symbol: 'WHSELFINVEST:USTECH100CFD', interval: '1',
       timezone: 'Asia/Seoul', theme: 'light', style: '1', locale: 'kr',
       allow_symbol_change: false, hide_side_toolbar: false, hide_top_toolbar: false,
-      hide_legend: true, save_image: false, calendar: false, studies: [] });
+      hide_legend: true, save_image: false, calendar: false, studies: [],
+      overrides: { 'scalesProperties.showSymbolLabels': false } });
     script.onerror = () => {
       if (disposed || !script.isConnected) return;
       status.textContent = '위젯 연결 실패';
