@@ -11,6 +11,7 @@ import { mergeCandleHistory } from "./chart-history.js";
 import { isFuturesSymbol, isWidgetSymbol } from "./instrument-catalog.js";
 import { mountTradingViewCard } from "./tradingview-card.js";
 import { buildCursorGroups, cursorTimeForChart, cursorTimeForLineBreak } from "./chart-alignment.js";
+import { koreanClosingBoundaries } from "./chart-session-markers.js";
 
 const TIMEFRAMES = [
   { label: "1분", value: "1m" },
@@ -603,9 +604,30 @@ function drawMacdBackground(state) {
 
   const ctx = bgCanvas.getContext("2d");
   ctx.clearRect(0, 0, width, height);
+  const timeScale = instance.chart.timeScale();
+  const plotWidth = timeScale.width() * dpr;
+  const plotHeight = Math.max(0, rect.height - timeScale.height()) * dpr;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, plotWidth, plotHeight);
+  ctx.clip();
+  ctx.strokeStyle = "rgba(31, 91, 216, 0.30)";
+  ctx.lineWidth = 0.6 * dpr;
+  ctx.setLineDash([2 * dpr, 4 * dpr]);
+  for (const boundary of koreanClosingBoundaries(rows || [], state.item.symbol, state.interval)) {
+    const fromX = timeScale.timeToCoordinate(boundary.from);
+    const toX = boundary.to === boundary.from ? fromX : timeScale.timeToCoordinate(boundary.to);
+    if (!Number.isFinite(fromX) || !Number.isFinite(toX)) continue;
+    const x = (fromX + (toX - fromX) * boundary.fraction) * dpr;
+    if (x < 0 || x > plotWidth) continue;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, plotHeight);
+    ctx.stroke();
+  }
+  ctx.restore();
   if (isLineBreak(state) || !rows?.length || !macd?.length) return;
 
-  const timeScale = instance.chart.timeScale();
   const points = rows
     .map((row, index) => {
       const x = timeScale.timeToCoordinate(row.time);
