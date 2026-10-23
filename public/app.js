@@ -611,7 +611,7 @@ function drawMacdBackground(state) {
   ctx.beginPath();
   ctx.rect(0, 0, plotWidth, plotHeight);
   ctx.clip();
-  ctx.strokeStyle = "rgba(31, 91, 216, 0.30)";
+  ctx.strokeStyle = "rgba(31, 91, 216, 0.45)";
   ctx.lineWidth = 0.6 * dpr;
   ctx.setLineDash([2 * dpr, 4 * dpr]);
   for (const boundary of koreanClosingBoundaries(rows || [], state.item.symbol, state.interval)) {
