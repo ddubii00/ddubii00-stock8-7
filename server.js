@@ -199,6 +199,10 @@ function isKoreanSymbol(symbol) {
   return symbol.endsWith(".KS") || symbol.endsWith(".KQ");
 }
 
+function isKoreanEtf(symbol) {
+  return isKoreanSymbol(symbol) && searchEtfs.has(symbol);
+}
+
 function isKoreanIndex(symbol) {
   return symbol === "^KS11" || symbol === "^KQ11";
 }
@@ -313,13 +317,13 @@ function forexMarketStatus(now = new Date()) {
   return open ? "장중" : "장종료";
 }
 
-function koreanStockStatus(timestamp, now = new Date(), trading = true) {
+function koreanStockStatus(timestamp, now = new Date(), trading = true, symbol = "") {
   if (!trading || !Number.isFinite(timestamp)) return "종가";
   const current = Math.floor(now.getTime() / 1000);
   const day = new Date((current + 9 * 3600) * 1000).getUTCDay();
   if ([0, 6].includes(day) || koreanDateKeyForTimestamp(timestamp) !== koreanDateKeyForTimestamp(current)) return "종가";
   const minute = koreanMinuteOfDay(current);
-  if (minute >= 16 * 60 && minute < 20 * 60) return "장후";
+  if (!isKoreanEtf(symbol) && minute >= 16 * 60 && minute < 20 * 60) return "장후";
   if (minute >= 15 * 60 + 20 && minute < 15 * 60 + 30) return "동시호가";
   return minute >= 9 * 60 && minute < 15 * 60 + 20 ? "장중" : "종가";
 }
@@ -590,7 +594,7 @@ async function fetchKisIntradayRows(symbol, count = 700) {
   const normalized = symbol.trim().toUpperCase();
   if (!KIS_ENABLED || !isKoreanSymbol(normalized)) return [];
   try {
-    const raw = await kisDomesticHistory(normalized.split(".")[0], count);
+    const raw = await kisDomesticHistory(normalized.split(".")[0], count, 'J', { regularOnly: isKoreanEtf(normalized) });
     const rows = parseKisIntradayRows(normalized, raw);
     if (rows.length) return rows;
   } catch {
@@ -794,6 +798,7 @@ function parseNaverRealtimeQuote(symbol, item, mode = "KRX") {
   const rawNxtPrice = numericField(item.overMarketPriceInfo?.overPrice);
   const useNxt = mode === "NTX"
     && isKoreanSymbol(normalized)
+    && !isKoreanEtf(normalized)
     && item.overMarketPriceInfo
     && isReasonableNtxPrice(rawNxtPrice, regularPrice);
   const direction = useNxt ? item.overMarketPriceInfo.compareToPreviousPrice : item.compareToPreviousPrice;
@@ -823,7 +828,7 @@ function parseNaverRealtimeQuote(symbol, item, mode = "KRX") {
     marketTime: asOf,
     marketStatus: isKoreanIndex(normalized)
       ? (statusOpen ? "장중" : "장종료")
-      : koreanStockStatus(asOf, new Date(), statusOpen),
+      : koreanStockStatus(asOf, new Date(), statusOpen, normalized),
     source: useNxt ? "naver-nxt-realtime" : "naver-realtime"
   };
   if (useNxt) {
@@ -908,7 +913,8 @@ async function fetchNaverMinuteRows(symbol, anchorTimestamp, lookbackDays = 7) {
   const code = normalized.split(".")[0];
   const dateKey = koreanDateKeyForTimestamp(anchorTimestamp || Math.floor(Date.now() / 1000));
   const startKey = koreanDateKeyForTimestamp((anchorTimestamp || Math.floor(Date.now() / 1000)) - lookbackDays * 86400);
-  const endTime = isKoreanSymbol(normalized) ? "2000" : "1530";
+  // Allow a late auction print, then normalize it back to the 15:30 bar.
+  const endTime = isKoreanEtf(normalized) ? "1532" : isKoreanSymbol(normalized) ? "2000" : "1530";
   const url = `https://api.finance.naver.com/siseJson.naver?symbol=${encodeURIComponent(code)}&requestType=1&startTime=${startKey}0900&endTime=${dateKey}${endTime}&timeframe=minute`;
   const cached = naverMinuteCache.get(url);
   if (cached?.task) return cached.task;
@@ -1005,14 +1011,14 @@ function normalizeKoreanIntradayRows(symbol, rows, options = {}) {
   const closeMinute = 15 * 60 + 30;
   const finalPrintStart = 15 * 60 + 31;
   const finalPrintEnd = 15 * 60 + 32;
-  const allowExtended = Boolean(options.allowExtended);
+  const allowExtended = !isKoreanEtf(symbol) && Boolean(options.allowExtended);
 
   for (const row of rows) {
     const minute = koreanMinuteOfDay(row.time);
     const isDelayedClosingPrint = minute >= finalPrintStart && minute <= finalPrintEnd;
     const time = isDelayedClosingPrint ? replaceKoreanTime(row.time, 15, 30) : minuteBucket(row.time);
     const isPreNtx = allowExtended && minute >= 8 * 60 && minute <= 8 * 60 + 50;
-    const isAfterMarket = isKoreanSymbol(symbol) && minute >= (allowExtended ? 15 * 60 + 40 : 16 * 60) && minute <= 20 * 60;
+    const isAfterMarket = isKoreanSymbol(symbol) && !isKoreanEtf(symbol) && minute >= (allowExtended ? 15 * 60 + 40 : 16 * 60) && minute <= 20 * 60;
     if (!isPreNtx && !isAfterMarket) {
       if (minute < 9 * 60) continue;
       if (minute >= closingAuctionStart && minute < closingAuctionEnd) continue;
@@ -1288,7 +1294,7 @@ function applyLiveQuoteToRows(rows, quote, intervalSeconds = 60, symbol = "") {
   if (isKoreanSymbol(symbol) || isKoreanIndex(symbol)) {
     const minute = koreanMinuteOfDay(quoteTime);
     const regular = minute >= 9 * 60 && (minute < 15 * 60 + 20 || (minute >= 15 * 60 + 30 && minute <= 15 * 60 + 32));
-    const after = isKoreanSymbol(symbol) && minute >= 16 * 60 && minute <= 20 * 60;
+    const after = isKoreanSymbol(symbol) && !isKoreanEtf(symbol) && minute >= 16 * 60 && minute <= 20 * 60;
     if ((!regular && !after) || bucketTime < last.time) return rows;
   }
   const now = Math.floor(Date.now() / 1000);
@@ -1556,7 +1562,15 @@ async function searchUsSymbols(query) {
   }
 }
 
-const searchEtfs = createEtfSearch(fetchWithTimeout);
+const etfCatalogPath = join(DATA_DIR, 'etf-catalog.json');
+const searchEtfs = createEtfSearch(fetchWithTimeout, Date.now, {
+  readCache: async () => JSON.parse(await readFile(etfCatalogPath, 'utf8')),
+  saveCache: async payload => {
+    const temporary = `${etfCatalogPath}.${process.pid}.tmp`;
+    await writeFile(temporary, JSON.stringify(payload), { mode: 0o600 });
+    await rename(temporary, etfCatalogPath);
+  }
+});
 const resolveKoreanCode = createKoreanCodeResolver(fetchWithTimeout, SYMBOL_NAMES);
 
 const progressiveSearch = createProgressiveSearch({
@@ -1632,6 +1646,7 @@ async function getNqData(interval, limit, quoteOnly = false) {
 
 async function getIntraday(symbol, interval = "1m", mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
+  if (await searchEtfs.isEtf(normalized)) return getChart(normalized, interval, 400, "KRX");
   if (isWidgetSymbol(normalized)) throw Object.assign(new Error("USTECH100은 TradingView 위젯으로 표시합니다. 원시 시세 API는 제공하지 않습니다."), { status: 503 });
   if (normalized === "NQ=F") {
     const futuresInterval = INTERVAL_CONFIG[interval] && isIntradayInterval(interval) ? interval : "1m";
@@ -1661,6 +1676,7 @@ async function getIntraday(symbol, interval = "1m", mode = "KRX") {
 
 async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", lineBreak = false) {
   const normalized = symbol.trim().toUpperCase();
+  if (await searchEtfs.isEtf(normalized)) mode = "KRX";
   if (isWidgetSymbol(normalized)) throw Object.assign(new Error("USTECH100은 TradingView 위젯으로 표시합니다. 원시 시세 API는 제공하지 않습니다."), { status: 503 });
   if (normalized === "NQ=F") return getNqData(INTERVAL_CONFIG[interval] ? interval : "1d", limit);
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1d"];
@@ -1831,7 +1847,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
         payload.marketTime = last.time;
         payload.asOf = last.time;
         payload.source = "kis-intraday";
-        payload.marketStatus = koreanStockStatus(last.time);
+        payload.marketStatus = koreanStockStatus(last.time, new Date(), true, normalized);
         payload.change = last.close - payload.previousClose;
         payload.changePercent = payload.previousClose ? payload.change / payload.previousClose * 100 : 0;
         liveQuote = { ...payload, series: undefined };
@@ -1869,6 +1885,19 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       series = applyLiveQuoteToRows(series, liveQuote, 60, normalized);
     }
     if (isIntradayInterval(interval)) series = applyKoreanClosingPrint(normalized, series, payload);
+    if (isIntradayInterval(interval) && isKoreanEtf(normalized)) {
+      // Filter every merged provider and live update before aggregation/indicators.
+      series = normalizeKoreanIntradayRows(normalized, series);
+      const last = series.at(-1);
+      if (!last) throw new Error("No regular-session ETF data");
+      payload.price = last.close;
+      payload.marketTime = last.time;
+      payload.asOf = last.time;
+      payload.marketStatus = koreanStockStatus(last.time, new Date(), true, normalized);
+      payload.change = last.close - payload.previousClose;
+      payload.changePercent = payload.previousClose ? payload.change / payload.previousClose * 100 : 0;
+      if (liveQuote) liveQuote = { ...liveQuote, ...payload, series: undefined };
+    }
     if (isIntradayInterval(interval)) series = removeFutureIntradayRows(series, config.seconds);
     const finalAggregateSeconds = isIntradayInterval(interval) && config.seconds > 60
       ? config.seconds
@@ -1938,6 +1967,10 @@ async function getCandles(symbol, limit = 140) {
 
 async function getQuote(symbol, mode = "KRX") {
   const normalized = symbol.trim().toUpperCase();
+  if (await searchEtfs.isEtf(normalized)) {
+    const { series, ...quote } = await getChart(normalized, "1m", 1, "KRX");
+    return quote;
+  }
   if (isWidgetSymbol(normalized)) throw Object.assign(new Error("USTECH100은 TradingView 위젯으로 표시합니다. 원시 시세 API는 제공하지 않습니다."), { status: 503 });
   if (normalized === "NQ=F") return getNqData("1m", 1, true);
   const kisMeta = {

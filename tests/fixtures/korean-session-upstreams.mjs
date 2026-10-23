@@ -19,6 +19,10 @@ for (const date of ['20261019', '20261020']) {
 }
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(String(input));
+  if (url.pathname === '/api/sise/etfItemList.nhn') return Response.json({ result: { etfItemList: [
+    { itemcode: '069500', itemname: 'KODEX 200' },
+    { itemcode: '1234A0', itemname: '테스트 ETF' }
+  ] } });
   if (url.pathname === '/oauth2/tokenP') return Response.json({ access_token: 'test-token', expires_in: 86400 });
   if (url.pathname.endsWith('/inquire-time-dailychartprice')) {
     if (options.headers.tr_id !== 'FHKST03010230' || url.searchParams.get('FID_COND_MRKT_DIV_CODE') !== 'J'

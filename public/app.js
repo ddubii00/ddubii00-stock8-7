@@ -346,6 +346,12 @@ function tickFormatter(interval, time) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function crosshairTimeFormatter(interval, time) {
+  if (interval !== "1d") return tickFormatter(interval, time);
+  const date = new Date(time * 1000);
+  return `${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function calcVisibleSma(state, period) {
   return calcSma(state.rows || [], period);
 }
@@ -372,7 +378,7 @@ function createLwChart(container, state) {
       fontFamily: "Inter, Pretendard, sans-serif"
     },
     localization: {
-      timeFormatter: (time) => tickFormatter(state.interval, time),
+      timeFormatter: (time) => crosshairTimeFormatter(state.interval, time),
       priceFormatter: (price) => formatAxisPrice(price, state.item.symbol)
     },
     handleScale: {
@@ -801,7 +807,7 @@ function applyPayload(state, payload, initial = false) {
     const priceFormat = priceFormatForSymbol(state.item.symbol);
     state.instance.chart.applyOptions({
       localization: {
-        timeFormatter: (time) => tickFormatter(state.interval, time),
+        timeFormatter: (time) => crosshairTimeFormatter(state.interval, time),
         priceFormatter: (price) => formatAxisPrice(price, state.item.symbol)
       },
       timeScale: {

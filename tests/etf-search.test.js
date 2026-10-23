@@ -60,3 +60,26 @@ test('a provider error or empty query does not fail the combined stock search', 
   assert.deepEqual(await search('TIGER'), []);
   assert.equal(calls, 1);
 });
+
+test('ETF classification uses the complete cached list, shares search requests, and excludes shares and US ETFs', async () => {
+  let calls = 0;
+  const many = { result: { etfItemList: [...payload.result.etfItemList, ...Array.from({ length: 20 }, (_, i) => ({ itemcode: String(400000 + i), itemname: '펀드 ' + i }))] } };
+  const search = createEtfSearch(async () => { calls++; return Response.json(many); });
+  const [found, etf, lateItem] = await Promise.all([search('ETF'), search.isEtf('069500.KS'), search.isEtf('400019.KS')]);
+  assert.equal(calls, 1);
+  assert.equal(found.length, 12);
+  assert.equal(etf, true);
+  assert.equal(lateItem, true);
+  assert.equal(search.has('1234a0.ks'), true);
+  assert.equal(await search.isEtf('000660.KS'), false);
+  assert.equal(await search.isEtf('QQQ.US'), false);
+});
+
+test('a persisted ETF list preserves classification after restart during provider outages', async () => {
+  let saved;
+  const first = createEtfSearch(async () => response(), Date.now, { saveCache: async value => { saved = value; } });
+  assert.equal(await first.isEtf('069500.KS'), true);
+  const restarted = createEtfSearch(async () => { throw Error('offline'); }, Date.now, { readCache: async () => saved });
+  assert.equal(await restarted.isEtf('069500.KS'), true);
+  assert.equal(restarted.has('000660.KS'), false);
+});
