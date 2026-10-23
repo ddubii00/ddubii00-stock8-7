@@ -623,7 +623,9 @@ function drawMacdBackground(state) {
     ctx.setLineDash([2 * dpr, 4 * dpr]);
     const boundaries = isLineBreak(state)
       ? lineBreakDateBoundaries(rows || [], state.interval, isKoreanSymbol(state.item.symbol) || isKoreanIndex(state.item.symbol) ? 'Asia/Seoul' : 'America/New_York')
-      : koreanClosingBoundaries(rows || [], state.item.symbol, state.interval);
+      : koreanClosingBoundaries(rows || [], state.item.symbol, state.interval, {
+        regularSessionOnly: state.lastPayload?.regularSessionOnly
+      });
     for (const boundary of boundaries) {
       const fromX = timeScale.timeToCoordinate(boundary.from);
       const toX = boundary.to === boundary.from ? fromX : timeScale.timeToCoordinate(boundary.to);

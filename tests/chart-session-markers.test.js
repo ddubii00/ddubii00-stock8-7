@@ -5,17 +5,28 @@ import { koreanClosingBoundaries, lineBreakDateBoundaries } from '../public/char
 const time = date => Date.parse(date) / 1000;
 const rows = dates => dates.map(date => ({ time: time(date) }));
 
-test('domestic stock and ETF intraday charts mark each actual 15:30 KST close', () => {
+test('domestic stock intraday charts mark each actual 15:30 KST close', () => {
   const source = rows(['2026-10-22T15:29:00+09:00', '2026-10-22T15:30:00+09:00',
     '2026-10-22T16:00:00+09:00', '2026-10-23T09:00:00+09:00', '2026-10-23T15:30:00+09:00', '2026-10-23T20:00:00+09:00']);
   const original = structuredClone(source);
   const closes = [time('2026-10-22T06:30:00Z'), time('2026-10-23T06:30:00Z')];
-  for (const symbol of ['000660.KS', '005930.KS', '069500.KS', '247540.KQ', '0052D0.KS']) {
+  for (const symbol of ['000660.KS', '005930.KS', '247540.KQ']) {
     for (const interval of ['1m', '3m', '5m', '10m', '15m', '30m', '60m']) {
       assert.deepEqual(koreanClosingBoundaries(source, symbol, interval), closes.map(time => ({ time, from: time, to: time, fraction: 0 })));
     }
   }
   assert.deepEqual(source, original);
+});
+
+test('ETFs and indices ending at 15:30 have no closing marker, while date separators remain available', () => {
+  const source = rows(['2026-10-22T15:30:00+09:00', '2026-10-23T09:00:00+09:00', '2026-10-23T15:30:00+09:00']);
+  for (const symbol of ['069500.KS', '0052D0.KS', '^KS11', '^KQ11']) {
+    for (const interval of ['1m', '3m', '5m', '10m', '15m', '30m', '60m']) {
+      assert.deepEqual(koreanClosingBoundaries(source, symbol, interval, { regularSessionOnly: true }), []);
+    }
+  }
+  const time = source[1].time;
+  assert.deepEqual(lineBreakDateBoundaries(source, '1m', 'Asia/Seoul'), [{ time, from: time, to: time, fraction: 0 }]);
 });
 
 test('hourly and sparse candle timelines position 15:30 between real same-day anchors', () => {

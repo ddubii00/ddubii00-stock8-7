@@ -24,8 +24,8 @@ export function lineBreakDateBoundaries(rows, interval, timeZone) {
 // Return real timeline anchors for each 15:30 KST boundary. When the exact
 // minute is missing (e.g. hourly bars), interpolate only within the same day.
 // Never add candles or project a boundary beyond the received history.
-export function koreanClosingBoundaries(rows, symbol, interval) {
-  if (!/^[0-9][A-Z0-9]{5}\.(KS|KQ)$/.test(symbol)
+export function koreanClosingBoundaries(rows, symbol, interval, { regularSessionOnly = false } = {}) {
+  if (regularSessionOnly || !/^[0-9][A-Z0-9]{5}\.(KS|KQ)$/.test(symbol)
       || !/^(1|3|5|10|15|30|60)m$/.test(interval)) return [];
   const boundaries = [];
   let previous;

@@ -1937,6 +1937,7 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       change,
       changePercent: liveQuote?.changePercent ?? (Number.isFinite(previousClose) && previousClose !== 0 ? (change / previousClose) * 100 : 0),
       marketStatus: payload.marketStatus || marketStatus(normalized),
+      regularSessionOnly: isKoreanIndex(normalized) || isKoreanEtf(normalized),
       source: payload.source || "yahoo",
       kis: kisMeta,
       series: trimmed

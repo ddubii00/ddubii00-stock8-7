@@ -34,6 +34,7 @@ const at = (date, time) => Date.parse(`${date}T${time}:00+09:00`) / 1000;
 for (const kis of [false, true]) test(`KRX prior 20:00 bars and current after-market survive ${kis ? 'KIS dated history' : 'Naver fallback'} and aggregation`, async t => {
   const chart = await server(t, '2026-10-20T16:10:00+09:00', kis);
   const payload = await chart();
+  assert.equal(payload.regularSessionOnly, false);
   assert.equal(payload.series.length, 700);
   assert.ok(payload.series.some(row => row.time === at('2026-10-19', '20:00')));
   assert.ok(payload.series.some(row => row.time === at('2026-10-19', '15:19')));
@@ -49,6 +50,7 @@ for (const kis of [false, true]) test(`KRX prior 20:00 bars and current after-ma
   const small = await chart('000660.KS', '1m', 80);
   assert.equal(small.series.length, 80);
   const index = await chart('^KS11');
+  assert.equal(index.regularSessionOnly, true);
   assert.ok(index.series.every(row => (row.time / 60 + 9 * 60) % 1440 <= 930));
 });
 
@@ -77,6 +79,7 @@ for (const kis of [false, true]) test(`domestic ETFs stop at 15:30 in both marke
       for (const interval of ['1m', '5m', '10m', '60m']) {
         const payload = await chart(symbol, interval, 700, mode);
         assert.ok(payload.series.length);
+        assert.equal(payload.regularSessionOnly, true);
         assert.ok(payload.series.every(row => (row.time / 60 + 9 * 60) % 1440 <= 930));
         assert.equal(payload.price, 150);
         assert.equal(payload.marketTime, at('2026-10-20', '15:30'));
