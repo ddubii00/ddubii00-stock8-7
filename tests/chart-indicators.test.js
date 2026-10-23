@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers } from '../public/chart-indicators.js';
+import { calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers, macdDisplayMarkers } from '../public/chart-indicators.js';
 import { calculateThreeLineBreak } from '../public/three-line-break.js';
 
 const bars = (values) => values.map((close, i) => ({ time: 1000 + i * 60, open: close - 1, high: close + 20, low: close - 20, close, volume: 10 }));
@@ -78,4 +78,21 @@ test('cross markers skip warmup, equality and unchanged sides; live candle revis
   assert.deepEqual(macdCrossMarkers(points).map(marker => marker.time), [35]);
   const early = points.slice(0, 33); early[5].value = 1;
   assert.deepEqual(macdCrossMarkers(early), []);
+});
+
+test('MACD display modes hide, retain existing arrows, or double both directions and increase wick clearance', () => {
+  const points = Array.from({ length: 34 }, (_, time) => ({ time, value: -1, signal: 0 }));
+  points.push({ time: 34, value: 1, signal: 0 }, { time: 35, value: -1, signal: 0 });
+  const crosses = macdCrossMarkers(points);
+  assert.equal(crosses.length, 2);
+  const normal = macdDisplayMarkers(points, 1);
+  const large = macdDisplayMarkers(points, 2);
+  assert.deepEqual(macdDisplayMarkers(points, 0), []);
+  assert.deepEqual(normal.filter(marker => marker.color !== 'transparent'), crosses);
+  for (let index = 0; index < normal.length; index++) {
+    assert.deepEqual(large[index], { ...normal[index], size: normal[index].size * 2 });
+  }
+  assert.deepEqual(macdDisplayMarkers(points, 0), []);
+  assert.deepEqual(macdDisplayMarkers(points, 1), normal);
+  assert.deepEqual(macdCrossMarkers(points), crosses);
 });

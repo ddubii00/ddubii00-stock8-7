@@ -70,3 +70,14 @@ export function macdCrossMarkers(macd) {
   }
   return markers;
 }
+
+// Keep cross detection independent of the display mode. Native markers at the
+// same time/position stack, so a transparent spacer keeps arrows off the wick.
+export function macdDisplayMarkers(macd, mode) {
+  const scale = mode === 1 ? 1 : mode === 2 ? 2 : 0;
+  if (!scale) return [];
+  return macdCrossMarkers(macd).flatMap(marker => [
+    { time: marker.time, position: marker.position, shape: 'circle', color: 'transparent', size: 0.65 * scale },
+    { ...marker, size: marker.size * scale }
+  ]);
+}

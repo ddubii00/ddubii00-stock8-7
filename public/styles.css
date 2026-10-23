@@ -777,7 +777,8 @@ body {
   line-height: 16px;
 }
 
-.navigation-controls #signalsButton.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.navigation-controls #signalsButton[data-mode="1"] { background: #dbeafe; border-color: #93c5fd; color: #1d4ed8; }
+.navigation-controls #signalsButton[data-mode="2"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* A TradingView card owns its controls and live connection independently. */
 .widget-card > :not(.external-chart) { display: none !important; }

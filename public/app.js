@@ -1,4 +1,4 @@
-import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers } from "./chart-indicators.js";
+import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly, calcMacd, macdDisplayMarkers } from "./chart-indicators.js";
 import { halfCandleLimit, initialViewLimit, initialViewInterval, initialComparisonChanges, slotPatchForView, viewLimitsFromShared } from "./chart-view-settings.js";
 import { LineBreakPriceBadge } from "./line-break-price-badge.js";
 import { captureViewport, refreshedViewport } from "./chart-viewport.js";
@@ -83,7 +83,7 @@ let showBollinger = true;
 const comparisonBollinger = new Map();
 let globalWeekly = false;
 let showLineBreak = false;
-let showMacdSignals = true;
+let macdSignalMode = 0;
 let chartFitFrame = 0;
 let priceScaleFitFrame = 0;
 let priceScaleWidth = PRICE_SCALE_WIDTH;
@@ -101,14 +101,9 @@ function bollingerEnabled() {
 
 function updateMacdMarkers(state) {
   if (state.widget) return;
-  const markers = showMacdSignals && state.macdSignals && !isLineBreak(state) && state.visible.candle ? macdCrossMarkers(state.macd) : [];
-  // Native markers stack at the same time/position. An invisible spacer adds
-  // breathing room from the wick while following pan, zoom and price scaling.
-  state.instance.candleSeries.setMarkers(markers.flatMap(marker => [
-    { time: marker.time, position: marker.position, shape: 'circle', color: 'transparent', size: 0.65 },
-    marker
-  ]));
-  state.card.dataset.macdSignals = String(markers.length);
+  const markers = state.macdSignals && !isLineBreak(state) && state.visible.candle ? macdDisplayMarkers(state.macd, macdSignalMode) : [];
+  state.instance.candleSeries.setMarkers(markers);
+  state.card.dataset.macdSignals = String(markers.length / 2);
 }
 
 function syncVerticalCursor() {
@@ -1104,9 +1099,14 @@ async function refreshAll(initial = false) {
 }
 
 document.querySelector('#signalsButton').addEventListener('click', event => {
-  showMacdSignals = !showMacdSignals;
-  event.currentTarget.classList.toggle('active', showMacdSignals);
-  event.currentTarget.setAttribute('aria-pressed', String(showMacdSignals));
+  macdSignalMode = (macdSignalMode + 1) % 3;
+  event.currentTarget.dataset.mode = String(macdSignalMode);
+  event.currentTarget.setAttribute('aria-pressed', String(macdSignalMode !== 0));
+  event.currentTarget.title = [
+    'MACD 화살표 숨김. 클릭하면 기본 크기로 표시',
+    'MACD 화살표 기본 크기. 클릭하면 2배 크기로 표시',
+    'MACD 화살표 2배 크기. 클릭하면 숨김'
+  ][macdSignalMode];
   for (const state of chartState.values()) updateMacdMarkers(state);
 });
 
