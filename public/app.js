@@ -605,31 +605,33 @@ function drawMacdBackground(state) {
   const ctx = bgCanvas.getContext("2d");
   ctx.clearRect(0, 0, width, height);
   const timeScale = instance.chart.timeScale();
-  const plotWidth = timeScale.width() * dpr;
-  const plotHeight = Math.max(0, rect.height - timeScale.height()) * dpr;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, 0, plotWidth, plotHeight);
-  ctx.clip();
-  ctx.strokeStyle = "rgba(31, 91, 216, 0.45)";
-  ctx.lineWidth = 0.6 * dpr;
-  ctx.setLineDash([2 * dpr, 4 * dpr]);
-  const boundaries = isLineBreak(state)
-    ? lineBreakDateBoundaries(rows || [], state.interval, isKoreanSymbol(state.item.symbol) || isKoreanIndex(state.item.symbol) ? 'Asia/Seoul' : 'America/New_York')
-    : koreanClosingBoundaries(rows || [], state.item.symbol, state.interval);
-  for (const boundary of boundaries) {
-    const fromX = timeScale.timeToCoordinate(boundary.from);
-    const toX = boundary.to === boundary.from ? fromX : timeScale.timeToCoordinate(boundary.to);
-    if (!Number.isFinite(fromX) || !Number.isFinite(toX)) continue;
-    const x = (fromX + (toX - fromX) * boundary.fraction) * dpr;
-    if (x < 0 || x > plotWidth) continue;
+  function drawSessionBoundaries() {
+    const plotWidth = timeScale.width() * dpr;
+    const plotHeight = Math.max(0, rect.height - timeScale.height()) * dpr;
+    ctx.save();
     ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, plotHeight);
-    ctx.stroke();
+    ctx.rect(0, 0, plotWidth, plotHeight);
+    ctx.clip();
+    ctx.strokeStyle = "rgba(31, 91, 216, 0.60)";
+    ctx.lineWidth = 0.8 * dpr;
+    ctx.setLineDash([2 * dpr, 4 * dpr]);
+    const boundaries = isLineBreak(state)
+      ? lineBreakDateBoundaries(rows || [], state.interval, isKoreanSymbol(state.item.symbol) || isKoreanIndex(state.item.symbol) ? 'Asia/Seoul' : 'America/New_York')
+      : koreanClosingBoundaries(rows || [], state.item.symbol, state.interval);
+    for (const boundary of boundaries) {
+      const fromX = timeScale.timeToCoordinate(boundary.from);
+      const toX = boundary.to === boundary.from ? fromX : timeScale.timeToCoordinate(boundary.to);
+      if (!Number.isFinite(fromX) || !Number.isFinite(toX)) continue;
+      const x = (fromX + (toX - fromX) * boundary.fraction) * dpr;
+      if (x < 0 || x > plotWidth) continue;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, plotHeight);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
-  ctx.restore();
-  if (isLineBreak(state) || !rows?.length || !macd?.length) return;
+  if (isLineBreak(state) || !rows?.length || !macd?.length) return drawSessionBoundaries();
 
   const points = rows
     .map((row, index) => {
@@ -638,7 +640,7 @@ function drawMacdBackground(state) {
     })
     .filter((point) => point && point.x >= -width * 0.05 && point.x <= width * 1.05);
 
-  if (!points.length) return;
+  if (!points.length) return drawSessionBoundaries();
 
   const gaps = points
     .slice(1)
@@ -700,6 +702,8 @@ function drawMacdBackground(state) {
       }
     }
   }
+  // Paint both types after the background so it cannot wash out candle lines.
+  drawSessionBoundaries();
 }
 
 function syncIndicatorMode(state) {
