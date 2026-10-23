@@ -483,6 +483,7 @@ body {
   background: rgba(21, 101, 192, 0.12);
   color: #1565c0;
 }
+.market-status.data-error { background: rgba(220, 38, 38, .12); color: #dc2626; }
 
 .last-price.up {
   color: #dc2626;
@@ -707,6 +708,7 @@ body {
 #instrumentsDialog::backdrop { background: rgba(15, 23, 42, .4); }
 .settings-heading, .settings-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .settings-heading h2 { font-size: 18px; }
+.settings-heading-actions { display: flex; align-items: center; gap: 8px; }
 .settings-help { margin: 10px 0; color: var(--muted); font-size: 12px; }
 #instrumentPages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 #instrumentPages fieldset { min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
@@ -723,7 +725,7 @@ body {
 #instrumentsDialog .instrument-results button:hover, #instrumentsDialog .instrument-results button[aria-selected="true"] { background: #eaf1ff; }
 #instrumentsError { color: #dc2626; font-size: 12px; margin-top: 8px; }
 .settings-actions { justify-content: flex-end; margin-top: 12px; }
-#instrumentsDialog #saveInstruments { background: var(--accent); color: white; }
+#instrumentsDialog .save-instruments { background: var(--accent); color: white; }
 #instrumentsDialog button:disabled { opacity: .5; cursor: default; }
 @media (max-width: 560px) { #instrumentPages { grid-template-columns: minmax(0, 1fr); } }
 .chart-card.loaded.no-line-break .loading { display: block; }

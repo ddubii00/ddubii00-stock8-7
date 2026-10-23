@@ -7,7 +7,7 @@ import { SharedDashboard } from "./shared-dashboard.js";
 import { PAGE_COUNT, SLOTS_PER_PAGE, LAYOUTS, layoutChartCount, layoutViews, isComparisonLayout, adjacentPage } from "./dashboard-model.js";
 import { TrendEditor } from "./trend-editor.js";
 import { InstrumentSettings } from "./instrument-settings.js";
-import { mergeCandleHistory } from "./chart-history.js";
+import { mergeCandleHistory, realChartRows } from "./chart-history.js";
 import { isFuturesSymbol, isWidgetSymbol } from "./instrument-catalog.js";
 import { mountTradingViewCard } from "./tradingview-card.js";
 import { buildCursorGroups, cursorTimeForChart, cursorTimeForLineBreak } from "./chart-alignment.js";
@@ -758,14 +758,12 @@ function renderLegend(state, payload) {
 }
 
 function applyPayload(state, payload, initial = false) {
+  let sourceRows = realChartRows(payload, state.item.symbol);
   if (payload.contract && state.lastPayload?.contract && payload.contract !== state.lastPayload.contract) {
     // A different contract starts its own price range and line-break history.
     initial = true;
     state.trendEditor?.reset();
   }
-  let sourceRows = payload.series || [];
-  if (!sourceRows.length) throw new Error("시세 데이터가 없습니다.");
-  if (isLineBreak(state) && /^fallback/.test(payload.source || "")) throw new Error("실제 시세 데이터를 받지 못했습니다.");
   const previousRows = state.rows || [];
   const previousLastTime = previousRows.at(-1)?.time;
   if (shouldIgnoreIntradayPayload(state, sourceRows, initial)) return;
@@ -889,6 +887,7 @@ async function refreshCard(state, initial = false) {
   try {
     const payload = await fetchChart(state);
     if (state.disposed || requestId !== state.requestId || key !== chartRequestKey(state)) return;
+    realChartRows(payload, state.item.symbol);
     state.item = {
       symbol: payload.symbol,
       name: state.item.name || payload.name,
@@ -899,12 +898,10 @@ async function refreshCard(state, initial = false) {
   } catch (error) {
     if (!state.disposed && requestId === state.requestId && key === chartRequestKey(state)) {
       state.card.querySelector(".loading").textContent = error.message || "데이터 오류";
-      if (isFuturesSymbol(state.item.symbol)) {
-        const status = state.card.querySelector('.market-status');
-        status.textContent = '수신 오류';
-        status.title = error.message;
-        status.classList.add('data-error');
-      }
+      const status = state.card.querySelector('.market-status');
+      status.textContent = '수신 오류';
+      status.title = error.message;
+      status.classList.add('data-error');
     }
   } finally {
     if (requestId === state.requestId) state.pendingKey = null;

@@ -84,4 +84,31 @@ test('chart API supplies longer real history for line breaks and never fabricate
   const alternate=await chart('symbol=005930.KS&interval=1m&limit=10000&chartType=line-break');
   assert.equal(alternate.status,200);
   const naver=await alternate.json();assert.equal(naver.series.length,60);assert.equal(naver.source,'naver-minute');
+  // An unsupported ticker (the reported KODEX.US case), provider outage or
+  // empty upstream must never become sample prices on any native endpoint.
+  for (const symbol of ['FAIL.US', 'KODEX.US', '999999.KS', 'EMPTY.US']) {
+    for (const interval of ['1m', '10m', '1d', '1wk', '1mo']) {
+      for (const chartType of ['candles', 'line-break']) {
+        const response = await chart(`symbol=${symbol}&interval=${interval}&chartType=${chartType}`);
+        assert.equal(response.status, 503, `${symbol} ${interval} ${chartType}`);
+        const error = await response.json();
+        assert.match(error.error, /실제 시세/);
+        assert.equal(error.series, undefined);
+        assert.equal(error.price, undefined);
+      }
+    }
+    for (const endpoint of ['quote', 'intraday', 'candles']) {
+      const response = await fetch(`${base}/api/${endpoint}?symbol=${symbol}`, {headers});
+      assert.equal(response.status, 503, `${symbol} ${endpoint}`);
+      const error = await response.json();
+      assert.equal(error.price, undefined);
+      assert.equal(error.series, undefined);
+    }
+  }
+  const realDaily = await fetch(base + '/api/candles?symbol=AAPL.US', {headers});
+  assert.equal(realDaily.status, 200);
+  assert.deepEqual((await realDaily.json()).series.map(row => row.close), [103, 105]);
+  const realQuote = await (await fetch(base + '/api/quote?symbol=AAPL.US', {headers})).json();
+  assert.equal(realQuote.source, 'yahoo');
+  assert.ok(Number.isFinite(realQuote.price));
 });

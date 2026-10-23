@@ -22,7 +22,8 @@ globalThis.fetch = async input => {
   }
   if (url.hostname.includes('finance.yahoo.com') && url.pathname.includes('/v8/finance/chart/')) {
     const symbol=decodeURIComponent(url.pathname.split('/').at(-1));
-    if (symbol==='FAIL' || symbol==='FAIL=F' || symbol==='005930.KS') return new Response('unavailable',{status:503});
+    if (['FAIL','FAIL=F','005930.KS','KODEX','999999.KS'].includes(symbol)) return new Response('unavailable',{status:503});
+    if (symbol==='EMPTY') return Response.json({chart:{result:[]}});
     const step=url.searchParams.get('interval')==='1wk'?604800:url.searchParams.get('interval')==='1d'?86400:60;
     const end = ['^KS11','^KQ11'].includes(symbol) ? indexNow - 20*60 : now;
     const timestamp=Array.from({length:2000},(_,i)=>end-(1999-i)*step);
@@ -32,6 +33,9 @@ globalThis.fetch = async input => {
   if (url.hostname==='api.finance.naver.com' && url.searchParams.get('symbol')==='005930') {
     const rows=Array.from({length:60},(_,i)=>`["${dateKey}09${String(i).padStart(2,'0')}",90000,90100,89900,${90000+i},${100*(i+1)}]`);
     return new Response('['+rows.join(',')+']');
+  }
+  if (url.hostname==='stooq.com' && url.searchParams.get('s')==='aapl.us') {
+    return new Response('Date,Open,High,Low,Close,Volume\n2026-10-21,100,104,99,103,1000\n2026-10-22,103,106,101,105,2000\n');
   }
   return new Response('unavailable',{status:503});
 };

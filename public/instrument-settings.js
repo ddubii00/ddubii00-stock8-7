@@ -19,8 +19,9 @@ export class InstrumentSettings {
     this.dialog = document.querySelector('#instrumentsDialog');
     this.pages = document.querySelector('#instrumentPages');
     this.error = document.querySelector('#instrumentsError');
+    this.saveButtons = [...document.querySelectorAll('[data-save-instruments]')];
     document.querySelector('#instrumentsButton').addEventListener('click', () => this.open());
-    for (const id of ['closeInstruments', 'cancelInstruments']) document.querySelector(`#${id}`).addEventListener('click', () => this.dialog.close());
+    for (const id of ['closeInstruments', 'cancelInstruments', 'cancelInstrumentsTop']) document.querySelector(`#${id}`).addEventListener('click', () => this.dialog.close());
     this.dialog.addEventListener('close', () => this.dispose());
     document.querySelector('#instrumentsForm').addEventListener('submit', event => { event.preventDefault(); void this.submit(); });
   }
@@ -33,6 +34,7 @@ export class InstrumentSettings {
     if (!state) return;
     this.dispose();
     this.rows = [];
+    this.saveButtons.forEach(button => { button.disabled = false; });
     this.error.textContent = '';
     this.pages.replaceChildren();
     for (let page = 0; page < PAGE_COUNT; page++) {
@@ -174,8 +176,10 @@ export class InstrumentSettings {
     this.select(row, item); return item;
   }
   async submit() {
-    const button = document.querySelector('#saveInstruments'), generation = this.generation;
-    button.disabled = true; this.error.textContent = '';
+    if (this.saveButtons.some(button => button.disabled)) return;
+    const generation = this.generation;
+    this.saveButtons.forEach(button => { button.disabled = true; });
+    this.error.textContent = '';
     try {
       const items = await Promise.all(this.rows.map(row => this.resolve(row)));
       if (generation !== this.generation) return;
@@ -183,6 +187,6 @@ export class InstrumentSettings {
       if (changes.length) this.save(changes);
       this.dialog.close();
     } catch (error) { if (generation === this.generation) this.error.textContent = error.message; }
-    finally { button.disabled = false; }
+    finally { if (generation === this.generation) this.saveButtons.forEach(button => { button.disabled = false; }); }
   }
 }

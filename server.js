@@ -173,22 +173,6 @@ const STOOQ_SYMBOLS = {
 
 
 
-const FALLBACK_BASE = {
-  "000660.KS": { price: 310000, step: 2600 },
-  "005930.KS": { price: 74600, step: 730 },
-  "AVGO.US": { price: 1785.25, step: 18.5 },
-  "F.US": { price: 12.5, step: 0.2 },
-  "CPNG.US": { price: 28.5, step: 0.5 },
-  "SPCX.US": { price: 35.5, step: 0.4 },
-  "SNDK.US": { price: 905.5, step: 12.4 },
-  "NVDA.US": { price: 214.75, step: 3.1 },
-  "TSLA.US": { price: 423.7, step: 6.4 },
-  "KRW=X": { price: 1362.4, step: 4.8 },
-  "^KS11": { price: 3048.2, step: 16 },
-  "^KQ11": { price: 782.3, step: 5.2 },
-  "^IXIC": { price: 19460.5, step: 120 }
-};
-
 const INTERVAL_CONFIG = {
   "1m": { yahooInterval: "1m", range: "5d", seconds: 60 },
   "3m": { yahooInterval: "1m", range: "5d", seconds: 180, aggregate: 180 },
@@ -1614,30 +1598,6 @@ async function searchSymbols(query) {
   return progressiveSearch(query);
 }
 
-function fallbackCandles(symbol, limit = 140, intervalSeconds = 60) {
-  const base = FALLBACK_BASE[symbol] || FALLBACK_BASE["NVDA.US"];
-  const rows = [];
-  let close = base.price - base.step * 12;
-  const now = Math.floor(Date.now() / 1000 / intervalSeconds) * intervalSeconds;
-  for (let i = limit - 1; i >= 0; i -= 1) {
-    const wave = Math.sin(i * 0.18 + symbol.length) * base.step * 1.8;
-    const drift = (limit - i) * base.step * 0.08;
-    const open = close + Math.cos(i * 0.13) * base.step * 0.8;
-    close = Math.max(base.step, open + wave * 0.18 + drift * 0.04);
-    const high = Math.max(open, close) + base.step * (0.8 + Math.abs(Math.sin(i)));
-    const low = Math.min(open, close) - base.step * (0.7 + Math.abs(Math.cos(i)));
-    rows.push({
-      time: now - i * intervalSeconds,
-      open: Number(open.toFixed(decimalsFor(symbol))),
-      high: Number(high.toFixed(decimalsFor(symbol))),
-      low: Number(low.toFixed(decimalsFor(symbol))),
-      close: Number(close.toFixed(decimalsFor(symbol))),
-      volume: Math.round(1_000_000 + Math.abs(Math.sin(i * 0.3)) * 8_000_000)
-    });
-  }
-  return rows;
-}
-
 async function getPublicFuturesHistory(interval, limit) {
   const config = INTERVAL_CONFIG[interval] || INTERVAL_CONFIG["1m"];
   const query = `range=${encodeURIComponent(config.range)}&interval=${encodeURIComponent(config.yahooInterval)}&includePrePost=true`;
@@ -1692,22 +1652,10 @@ async function getIntraday(symbol, interval = "1m", mode = "KRX") {
       payload.marketTime = last.time;
       payload.asOf = last.time;
     }
-    return normalizeUsPriceChange(payload);
-  } catch {
+    return normalizeUsPriceChange({ ...payload, source: "yahoo" });
+  } catch (error) {
     if (isFuturesSymbol(normalized)) throw Object.assign(new Error("선물 시세 데이터를 받지 못했습니다."), { status: 503 });
-    const series = fallbackCandles(normalized, 96, 60);
-    const previousClose = series[0].open;
-    const price = series.at(-1).close;
-    const change = price - previousClose;
-    return {
-      symbol: normalized,
-      price,
-      previousClose,
-      change,
-      changePercent: previousClose ? (change / previousClose) * 100 : 0,
-      asOf: series.at(-1).time,
-      series
-    };
+    throw Object.assign(new Error("실제 분봉 시세 데이터를 받지 못했습니다. 종목 코드와 데이터 연결을 확인해 주세요.", { cause: error }), { status: 503 });
   }
 }
 
@@ -1960,30 +1908,15 @@ async function getChart(symbol, interval = "1d", limit = 120, mode = "KRX", line
       change,
       changePercent: liveQuote?.changePercent ?? (Number.isFinite(previousClose) && previousClose !== 0 ? (change / previousClose) * 100 : 0),
       marketStatus: payload.marketStatus || marketStatus(normalized),
-      source: payload.source || (kisMeta.attempted && !kisMeta.ok ? "fallback-after-kis-error" : "yahoo-or-sample"),
+      source: payload.source || "yahoo",
       kis: kisMeta,
       series: trimmed
     });
   } catch (error) {
     if (isFuturesSymbol(normalized)) throw Object.assign(new Error("선물 시세 데이터를 받지 못했습니다."), { status: 503 });
-    if (lineBreak) throw Object.assign(new Error("삼선전환도를 계산할 실제 시세 데이터를 받지 못했습니다."), { status: 503 });
-    if (kisMeta.attempted && !kisMeta.ok && !kisMeta.error) kisMeta.error = kisErrorMessage(error);
-    const series = fallbackCandles(normalized, limit, config.seconds);
-    const previousClose = series.length > 1 ? series.at(-2).close : series[0].open;
-    const price = series.at(-1).close;
-    const change = price - previousClose;
-    return {
-      symbol: normalized,
-      price,
-      previousClose,
-      change,
-      changePercent: previousClose ? (change / previousClose) * 100 : 0,
-      asOf: series.at(-1).time,
-      marketStatus: marketStatus(normalized),
-      source: kisMeta.attempted && !kisMeta.ok ? "fallback-after-kis-error" : "fallback",
-      kis: kisMeta,
-      series
-    };
+    const message = lineBreak ? "삼선전환도를 계산할 실제 시세 데이터를 받지 못했습니다."
+      : "실제 시세 데이터를 받지 못했습니다. 종목 코드와 데이터 연결을 확인해 주세요.";
+    throw Object.assign(new Error(message, { cause: error }), { status: 503 });
   }
 }
 
@@ -1998,8 +1931,8 @@ async function getCandles(symbol, limit = 140) {
     const rows = parseDailyCsv(await response.text());
     if (!rows.length) throw new Error("No candle data");
     return rows.slice(-limit);
-  } catch {
-    return fallbackCandles(normalized, limit, 86400);
+  } catch (error) {
+    throw Object.assign(new Error("실제 일봉 시세 데이터를 받지 못했습니다. 종목 코드와 데이터 연결을 확인해 주세요.", { cause: error }), { status: 503 });
   }
 }
 
@@ -2032,7 +1965,7 @@ async function getQuote(symbol, mode = "KRX") {
         kis: kisMeta
       };
     } catch {
-      // Continue to Yahoo/fallback if Naver realtime is unavailable.
+      // Try actual Yahoo data if Naver realtime is unavailable.
     }
   }
   const intraday = await getIntraday(normalized, "1m", mode);
@@ -2047,7 +1980,7 @@ async function getQuote(symbol, mode = "KRX") {
     ...(isUsSymbol(normalized) ? { changeBasis: intraday.changeBasis, previousCloseDate: intraday.previousCloseDate } : {}),
     asOf: intraday.asOf,
     marketStatus: marketStatus(normalized),
-    source: kisMeta.attempted && !kisMeta.ok ? "fallback-after-kis-error" : "yahoo-or-sample",
+    source: intraday.source || "yahoo",
     kis: kisMeta
   };
 }
