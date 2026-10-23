@@ -1,4 +1,4 @@
-import { MA_PERIODS, MA_COLORS, calcSma, calcBollinger, setWeekly, calcMacd, macdDisplayMarkers } from "./chart-indicators.js";
+import { MA_PERIODS, MA_COLORS, maVisibilityForInterval, calcSma, calcBollinger, setWeekly, calcMacd, macdDisplayMarkers } from "./chart-indicators.js";
 import { halfCandleLimit, initialViewLimit, initialViewInterval, initialComparisonChanges, slotPatchForView, viewLimitsFromShared } from "./chart-view-settings.js";
 import { LineBreakPriceBadge } from "./line-break-price-badge.js";
 import { captureViewport, refreshedViewport } from "./chart-viewport.js";
@@ -714,8 +714,13 @@ function syncIndicatorMode(state) {
   state.instance.chart.applyOptions({ crosshair: { horzLine: { labelVisible: !isLineBreak(state) } } });
   state.priceBadge?.updateAllViews();
   state.card.setAttribute('aria-label', `${state.item.name || state.item.symbol} ${isLineBreak(state) ? '삼선전환도' : '캔들차트'}`);
+  Object.assign(state.visible, maVisibilityForInterval(state.interval, state.maOverrides));
   for (const period of MA_PERIODS) {
-    state.instance.maSeries[period].applyOptions({ visible: !isLineBreak(state) && state.visible[`ma${period}`] });
+    const key = `ma${period}`;
+    const button = state.card.querySelector(`[data-series="${key}"]`);
+    button.classList.toggle('off', !state.visible[key]);
+    button.setAttribute('aria-pressed', String(state.visible[key]));
+    state.instance.maSeries[period].applyOptions({ visible: !isLineBreak(state) && state.visible[key] });
     if (isLineBreak(state)) state.instance.maSeries[period].setData([]);
   }
   updateBollinger(state);
@@ -881,6 +886,7 @@ async function refreshCard(state, initial = false) {
   const requestId = state.requestId = (state.requestId || 0) + 1;
   state.pendingKey = key;
   if (initial) {
+    syncIndicatorMode(state);
     state.card.classList.remove("loaded");
     state.card.querySelector(".loading").textContent = "불러오는 중";
   }
@@ -913,6 +919,7 @@ function bindLegend(card, state) {
     button.addEventListener("click", () => {
       const key = button.dataset.series;
       state.visible[key] = !state.visible[key];
+      if (MA_PERIODS.some(period => key === `ma${period}`)) state.maOverrides[key] = state.visible[key];
       button.classList.toggle("off", !state.visible[key]);
       button.setAttribute("aria-pressed", String(state.visible[key]));
       updateSeriesVisibility(state);
@@ -996,14 +1003,10 @@ async function createCard(item, index, view = {}, position = index, before = nul
     sourceRows: [],
     rows: [],
     macd: [],
+    maOverrides: {},
     visible: {
       candle: true,
-      ma5: true,
-      ma10: true,
-      ma20: true,
-      ma60: true,
-      ma120: true,
-      ma200: true,
+      ...maVisibilityForInterval(globalWeekly ? "1wk" : initialViewInterval(item, view.chartType)),
       bb: bollingerEnabled()
     }
   };

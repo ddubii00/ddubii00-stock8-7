@@ -1,9 +1,32 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers, macdDisplayMarkers } from '../public/chart-indicators.js';
+import { MA_PERIODS, maVisibilityForInterval, calcSma, calcBollinger, setWeekly, calcMacd, macdCrossMarkers, macdDisplayMarkers } from '../public/chart-indicators.js';
 import { calculateThreeLineBreak } from '../public/three-line-break.js';
 
 const bars = (values) => values.map((close, i) => ({ time: 1000 + i * 60, open: close - 1, high: close + 20, low: close - 20, close, volume: 10 }));
+
+test('minute charts default to MA 5/20/60, while calendar charts retain all moving averages', () => {
+  for (const interval of ['1m', '3m', '5m', '10m', '15m', '30m', '60m']) {
+    assert.deepEqual(maVisibilityForInterval(interval), { ma5:true, ma10:false, ma20:true, ma60:true, ma120:false, ma200:false });
+  }
+  for (const interval of ['1d', '1wk', '1mo']) {
+    assert.ok(MA_PERIODS.every(period => maVisibilityForInterval(interval)[`ma${period}`]));
+  }
+});
+
+test('explicit MA legend choices survive refresh and timeframe changes without replacing untouched defaults', () => {
+  const overrides = { ma10:true, ma120:true, ma5:false };
+  for (const interval of ['1m', '5m', '1wk', '3m']) {
+    const visible = maVisibilityForInterval(interval, overrides);
+    assert.equal(visible.ma10, true);
+    assert.equal(visible.ma120, true);
+    assert.equal(visible.ma5, false);
+    assert.equal(visible.ma200, interval === '1wk');
+    assert.equal(visible.ma20, true);
+    assert.equal(visible.ma60, true);
+  }
+  assert.deepEqual(overrides, { ma10:true, ma120:true, ma5:false });
+});
 
 test('200-period SMA starts at the 200th bar and rolls forward', () => {
   const rows = bars(Array.from({ length: 205 }, (_, i) => i + 1));

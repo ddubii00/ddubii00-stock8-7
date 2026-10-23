@@ -8,6 +8,14 @@ export const MA_COLORS = {
   200: "#92400e"
 };
 
+export function maVisibilityForInterval(interval, overrides = {}) {
+  const intraday = /^(1|3|5|10|15|30|60)m$/.test(interval);
+  return Object.fromEntries(MA_PERIODS.map(period => {
+    const key = `ma${period}`;
+    return [key, typeof overrides[key] === 'boolean' ? overrides[key] : !intraday || [5, 20, 60].includes(period)];
+  }));
+}
+
 export function calcSma(rows, period) {
   const result = [];
   for (let i = period - 1; i < rows.length; i += 1) {
